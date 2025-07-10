@@ -71,7 +71,7 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
                 let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap()); 
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
-    }
+            }
             return Ok(map);
        }
        _ => {return Err("Invalid domain".to_string());}
