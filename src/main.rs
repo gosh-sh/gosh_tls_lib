@@ -27,7 +27,7 @@ fn append_uint32(b: &mut Vec<u8>, v: u32) {
     b.push(v as u8);
 }
 
-fn main() {
+fn main_() {
     //https://www.facebook.com/.well-known/oauth/openid/jwks/
     let domain = "www.facebook.com";
     let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
