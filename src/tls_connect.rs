@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::collections::HashMap;
 use crate::tls_session::*;
 //use hex::*;

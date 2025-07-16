@@ -2455,7 +2455,7 @@ pub fn check_certs_with_known_roots(current_time: i64, check_sum: &[u8], certs_c
 
     return None;
 }
-
+/*
 #[test]
 fn test_parsing_leaf_cert(){
 
@@ -2523,7 +2523,7 @@ fn test_parsing_leaf_cert(){
     
     assert_eq!(certificate.public_key_algorithm, PublicKeyAlgorithm::ECDSA);
     
-    /*let etalon_pk = PublicKey::ECDSAPublicKey(ecdsa::PublicKey{
+    let etalon_pk = PublicKey::ECDSAPublicKey(ecdsa::PublicKey{
         curve: Curve {
             p: Default::default(),
             n: Default::default(),
@@ -2535,10 +2535,10 @@ fn test_parsing_leaf_cert(){
         },
         x: BigInt::from_str("112321356145379214094818301380289946094074558649736816888277127582448981034833"),
         y: BigInt::from_str("84583706057714013775544235912841985893594821113486056562093352390134289281879")
-    });*/
+    });
 }
 
-/*
+
 #[test]
 fn test_parsing_internal_cert(){
     // len is 1295

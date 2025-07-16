@@ -1,4 +1,4 @@
-extern crate core;
+/*extern crate core;
 
 pub mod tls_session;
 pub mod format;
@@ -27,10 +27,11 @@ fn append_uint32(b: &mut Vec<u8>, v: u32) {
     b.push(v as u8);
 }
 
-fn main_() {
+#[test]
+fn main_test() {
     //https://www.facebook.com/.well-known/oauth/openid/jwks/
     let domain = "www.facebook.com";
-    let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
+    //let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
 
     //https://kauth.kakao.com/.well-known/jwks.json
     //let domain = "kauth.kakao.com";
@@ -39,6 +40,12 @@ fn main_() {
     //https://www.googleapis.com/oauth2/v3/certs
     //let domain = "www.googleapis.com";
     //let jwk_get_request = "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ";
+
+    let jwk_get_request = match domain {
+        "www.googleapis.com" => "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ",
+        "kauth.kakao.com" => "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ",
+        _ => "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ", // facebook
+    };
 
     let tls_session = get_jwk_tls_data(domain, jwk_get_request).unwrap();
 
@@ -52,23 +59,15 @@ fn main_() {
 
     //println!("tls_session_hex: {:?}", tls_session_hex);
 
-    /*let root_cert = tls_session::get_root_cert_google_g2();
+    let root_cert = tls_session::get_root_cert_google_g2();
     let mut len_of_root_cert = vec![5u8, 91u8];
 
     let mut data: Vec<u8> = Vec::new();
     data.append(&mut len_of_root_cert);
     data.append(&mut root_cert.to_vec());
 
-    println!("cert 2: {:?}", hex::encode(data));*/
+    println!("cert 2: {:?}", hex::encode(data));
 
-   /* let root_cert = tls_session::get_root_cert_google_g4();
-    let mut len_of_root_cert = vec![2u8, 13u8];
-
-    let mut data: Vec<u8> = Vec::new();
-    data.append(&mut len_of_root_cert);
-    data.append(&mut root_cert.to_vec());
-
-    println!("cert 4: {:?}", hex::encode(data));*/
 
     let current_timestamp = 1000u32;// SystemTime::now()
     let mut data: Vec<u8> = Vec::new();
@@ -101,5 +100,5 @@ fn main_() {
     println!("jwk public_key_data is : {:?}", public_key_data);
     println!("jwk public_key_data hex is : {:?}", hex::encode(public_key_data));
     
-}
+}*/
 
