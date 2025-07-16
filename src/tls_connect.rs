@@ -18,7 +18,7 @@ pub fn get_jwk_tls_data(domain: &str, get_request: &str) -> Result<(String, Stri
         domain
     );
     let req = format!("{}{}", get_request, req_);
-    //println!("req.as_bytes() is : {:?}", req);
+    println!("req.as_bytes() is : {:?}", req);
     session.send_data(req.as_bytes());
     println!("SendData done");
 
@@ -29,6 +29,7 @@ pub fn get_jwk_tls_data(domain: &str, get_request: &str) -> Result<(String, Stri
     println!("ReceiveHTTPResponse done");
     let serialized_session = session.serialize();
     Ok((session.root_cert_sn, hex::encode(serialized_session)))
+    
 }
 
 
