@@ -1,4 +1,4 @@
-/*extern crate core;
+extern crate core;
 
 pub mod tls_session;
 pub mod format;
@@ -30,11 +30,11 @@ fn append_uint32(b: &mut Vec<u8>, v: u32) {
 #[test]
 fn main_test() {
     //https://www.facebook.com/.well-known/oauth/openid/jwks/
-    let domain = "www.facebook.com";
+    //let domain = "www.facebook.com";
     //let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
 
     //https://kauth.kakao.com/.well-known/jwks.json
-    //let domain = "kauth.kakao.com";
+    let domain = "kauth.kakao.com";
     //let jwk_get_request =  "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ";
 
     //https://www.googleapis.com/oauth2/v3/certs
@@ -100,5 +100,5 @@ fn main_test() {
     println!("jwk public_key_data is : {:?}", public_key_data);
     println!("jwk public_key_data hex is : {:?}", hex::encode(public_key_data));
     
-}*/
+}
 
