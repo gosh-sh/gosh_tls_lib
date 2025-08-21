@@ -398,9 +398,12 @@ impl Session {
             println!("error in certificates chain !");
             return false;
         }
-        //write to file
-        let mut file = File::create("found_root_id.txt").expect("Error creating file");
-        file.write(check_result.unwrap().to_string().as_bytes());
+
+        let root_cert_sn = format!("0x{:064x}", check_result.clone().unwrap());
+        println!("root_cert_sn: {:?}", root_cert_sn);
+        //let mut file = File::create("found_root_id.txt").expect("Error creating file");
+        //file.write(check_result.unwrap().to_string().as_bytes());
+        self.root_cert_sn = root_cert_sn;
         return true;
     }
 
@@ -717,7 +720,7 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
 
     let handshake_messages = format::concatenate(&[&client_hello[5..], &server_hello[5..]]);
 
-    let c_hs_secret = derive_secret(&handshake_secret, "c hs traffic", &handshake_messages);
+    //let c_hs_secret = derive_secret(&handshake_secret, "c hs traffic", &handshake_messages);
     //let client_handshake_secret = c_hs_secret.clone();
     //let client_handshake_key: [u8; 16] =
         //hkdf_expand_label(&c_hs_secret, "key", &[], 16).try_into().unwrap();

@@ -1,13 +1,11 @@
-extern crate core;
+use crate::tls_connect::get_jwk_tls_data;
 
-pub mod tls_session;
-pub mod format;
-pub mod network;
-pub mod tls_connect;
+use crate::format;
 
 use num_bigint::BigInt;
-use tls_session::Session;
-use tls_connect::*;
+//use crate::tls_session::Session;
+use crate::tls_connect::*;
+use crate::tls_session;
 
 use std::io::{self, Write, BufRead, Read};
 use std::net::TcpStream;
@@ -15,6 +13,8 @@ use std::fs::File;
 use num_traits::Num;
 
 use hex::FromHex;
+
+use chrono::Utc;
 
 fn deserialize_from_hex_str(data: &str) -> Result<Vec<u8>, hex::FromHexError> {
     Vec::from_hex(data)
@@ -34,11 +34,11 @@ fn main_test() {
     //let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
 
     //https://kauth.kakao.com/.well-known/jwks.json
-    let domain = "kauth.kakao.com";
+    //let domain = "kauth.kakao.com";
     //let jwk_get_request =  "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ";
 
     //https://www.googleapis.com/oauth2/v3/certs
-    //let domain = "www.googleapis.com";
+    let domain = "www.googleapis.com";
     //let jwk_get_request = "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ";
 
     let jwk_get_request = match domain {
@@ -59,23 +59,23 @@ fn main_test() {
 
     //println!("tls_session_hex: {:?}", tls_session_hex);
 
-    let root_cert = tls_session::get_root_cert_google_g2();
-    let mut len_of_root_cert = vec![5u8, 91u8];
+    //let root_cert = tls_session::get_root_cert_google_g2();
+    //let mut len_of_root_cert = vec![5u8, 91u8];
 
-    let mut data: Vec<u8> = Vec::new();
-    data.append(&mut len_of_root_cert);
-    data.append(&mut root_cert.to_vec());
+    //let mut data: Vec<u8> = Vec::new();
+    //data.append(&mut len_of_root_cert);
+    //data.append(&mut root_cert.to_vec());
 
-    println!("cert 2: {:?}", hex::encode(data));
+    //println!("cert 2: {:?}", hex::encode(data));
 
 
-    let current_timestamp = 1000u32;// SystemTime::now()
+    let current_timestamp = Utc::now().timestamp() as u32;// SystemTime::now()
     let mut data: Vec<u8> = Vec::new();
     append_uint32(&mut data, current_timestamp);
     println!("tls_session_bytes is : {:?}", tls_session_bytes);
 
-    //let mut kid = hex::decode("b509c5138768f7cf2e827e04b27e7e4cbc7bb919").unwrap();
-    let mut kid = hex::decode("d87d2474896f213ee52e6069ae0dd1553340a08c").unwrap();
+    let mut kid = hex::decode("98dc55c8b209363a2451774bce5c42718d13cb7d").unwrap(); // google kid
+    //let mut kid = hex::decode("3f96980381e451efad0d2ddd30e3d3").unwrap(); // kakao kid
     //let mut kid = hex::decode("9f252dadd5f233f93d2fa528d12fea").unwrap();
     println!("kid is : {:?}", kid);
     let mut root_cert = match domain {
