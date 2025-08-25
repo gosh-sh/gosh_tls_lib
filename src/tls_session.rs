@@ -47,27 +47,27 @@ const SHA384WITH_RSAPSS: u16 = 2058; // 08 0a (RSA-PSS-PSS-SHA384)
 const SHA512WITH_RSAPSS: u16 = 2059; // 08 0b (RSA-PSS-PSS-SHA512)
 const PureEd25519: u16 = 2055; // 08 07 (ED25519)
 
-pub fn get_root_cert_google_g1() -> [u8;1371] {
+pub fn get_root_cert_google_g1() -> [u8;1373] {
     certs::ROOT_GOOGLE_CERT_G1
 }
 
-pub fn get_root_cert_google_g2() -> [u8;1371] {
+pub fn get_root_cert_google_g2() -> [u8;1373] {
     certs::ROOT_GOOGLE_CERT_G2
 }
 
-pub fn get_root_cert_google_g3() -> [u8;525] {
+pub fn get_root_cert_google_g3() -> [u8;527] {
     certs::ROOT_GOOGLE_CERT_G3
 }
 
-pub fn get_root_cert_google_g4() -> [u8;525] {
+pub fn get_root_cert_google_g4() -> [u8;527] {
     certs::ROOT_GOOGLE_CERT_G4
 }
 
-pub fn get_root_cert_kakao() -> [u8;914] {
+pub fn get_root_cert_kakao() -> [u8;916] {
     certs::ROOT_KAKAO_CERT
 }
 
-pub fn get_root_cert_facebook() -> [u8;969] {
+pub fn get_root_cert_facebook() -> [u8;971] {
     certs::ROOT_FACEBOOK_CERT
 }
 
