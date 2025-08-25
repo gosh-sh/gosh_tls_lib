@@ -76,7 +76,7 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
     match domain {
        "www.googleapis.com" => {
             for root_cert_hex in certs::GOOGLE_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap()); 
+                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]); 
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
@@ -84,7 +84,7 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
        }
        "kauth.kakao.com" => {
             for root_cert_hex in certs::KAKAO_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap()); 
+                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]); 
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
@@ -92,7 +92,7 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
        }
        "www.facebook.com" => {
             for root_cert_hex in certs::FACEBOOK_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap()); 
+                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]); 
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }

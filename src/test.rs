@@ -1,5 +1,6 @@
 extern crate core;
 use crate::tls_connect::get_jwk_tls_data;
+use crate::tls_connect::get_root_certs_map;
 use crate::tls_session;
 
 use std::io::{self, Write, BufRead, Read};
@@ -77,6 +78,12 @@ fn test() {
 
     println!("jwk public_key_data is : {:?}", public_key_data);
     println!("jwk public_key_data hex is : {:?}", hex::encode(public_key_data));
+    
+    ///
+    
+    let domain = "www.googleapis.com";
+    let root_provider_certificates = get_root_certs_map(domain).unwrap();
+    println!("root_provider_certificates: {:?}", root_provider_certificates);
     
 }
 
