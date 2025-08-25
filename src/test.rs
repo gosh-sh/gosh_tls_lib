@@ -1,13 +1,6 @@
 extern crate core;
-
-pub mod tls_session;
-pub mod format;
-pub mod network;
-pub mod tls_connect;
-
-use num_bigint::BigInt;
-use tls_session::Session;
-use tls_connect::*;
+use crate::tls_connect::get_jwk_tls_data;
+use crate::tls_session;
 
 use std::io::{self, Write, BufRead, Read};
 use std::net::TcpStream;
@@ -27,8 +20,8 @@ fn append_uint32(b: &mut Vec<u8>, v: u32) {
     b.push(v as u8);
 }
 
-//#[test]
-fn main() {
+#[test]
+fn test() {
     //https://www.facebook.com/.well-known/oauth/openid/jwks/
     //let domain = "www.facebook.com";
     //let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
