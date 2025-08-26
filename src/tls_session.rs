@@ -2,26 +2,28 @@
 mod aes256gcm;
 mod certs;
 mod hkdf_sha256;
-mod x25519;
 mod sha512;
+mod x25519;
 
 use std::collections::HashMap;
-use x25519::{curve25519_donna, BASE_POINT};
-use format::*;
-use hkdf_sha256::*;
-
-use std::io::{self, Write};
+use std::io::Write;
+use std::io::{self};
 use std::net::TcpStream;
 
-use chrono::Utc;
 //use base64::decode;
 use base64url::decode;
+use chrono::Utc;
+use format::*;
 use hex::FromHex;
-
+use hkdf_sha256::*;
 use rand::RngCore;
-use crate::{network, format};
-use crate::tls_session::certs::{check_certs_with_fixed_root, check_certs_with_known_roots}; // Для генерации случайных данных
+use x25519::BASE_POINT;
+use x25519::curve25519_donna;
 
+use crate::format;
+use crate::network;
+use crate::tls_session::certs::check_certs_with_fixed_root;
+use crate::tls_session::certs::check_certs_with_known_roots; // Для генерации случайных данных
 
 //const UnknownSignatureAlgorithm: u16 = 0;
 //const MD2WithRSA: u16 = 1;  // Unsupported.
@@ -45,76 +47,77 @@ const SHA384WITH_RSAPSS: u16 = 2058; // 08 0a (RSA-PSS-PSS-SHA384)
 const SHA512WITH_RSAPSS: u16 = 2059; // 08 0b (RSA-PSS-PSS-SHA512)
 const PURE_ED25519: u16 = 2055; // 08 07 (ED25519)
 
-pub fn get_root_cert_google_g1() -> [u8;1371] {
+pub fn get_root_cert_google_g1() -> [u8; 1371] {
     certs::ROOT_GOOGLE_CERT_G1
 }
 
-pub fn get_root_cert_google_g2() -> [u8;1371] {
+pub fn get_root_cert_google_g2() -> [u8; 1371] {
     certs::ROOT_GOOGLE_CERT_G2
 }
 
-pub fn get_root_cert_google_g3() -> [u8;525] {
+pub fn get_root_cert_google_g3() -> [u8; 525] {
     certs::ROOT_GOOGLE_CERT_G3
 }
 
-pub fn get_root_cert_google_g4() -> [u8;525] {
+pub fn get_root_cert_google_g4() -> [u8; 525] {
     certs::ROOT_GOOGLE_CERT_G4
 }
 
-pub fn get_root_cert_kakao() -> [u8;914] {
+pub fn get_root_cert_kakao() -> [u8; 914] {
     certs::ROOT_KAKAO_CERT
 }
 
-pub fn get_root_cert_facebook() -> [u8;969] {
+pub fn get_root_cert_facebook() -> [u8; 969] {
     certs::ROOT_FACEBOOK_CERT
 }
 
 pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, String> {
     let mut map: HashMap<String, String> = HashMap::new();
     match domain {
-       "www.googleapis.com" => {
+        "www.googleapis.com" => {
             for root_cert_hex in certs::GOOGLE_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap()); 
+                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap());
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
             return Ok(map);
-       }
-       "kauth.kakao.com" => {
+        }
+        "kauth.kakao.com" => {
             for root_cert_hex in certs::KAKAO_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap()); 
+                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap());
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
             return Ok(map);
-       }
-       "www.facebook.com" => {
+        }
+        "www.facebook.com" => {
             for root_cert_hex in certs::FACEBOOK_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap()); 
+                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap());
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
             return Ok(map);
-       }
-       _ => {return Err("Invalid domain".to_string());}
+        }
+        _ => {
+            return Err("Invalid domain".to_string());
+        }
     }
 }
 
 pub struct Keys {
     pub public: [u8; 32],
-    pub private: [u8; 32],//Vec<u8>,
-    pub handshake_secret: [u8;32],
-    pub client_handshake_secret: [u8;32],
-    pub client_handshake_key: [u8;16],
-    pub server_handshake_key: [u8;16],
-    pub client_handshake_iv: [u8;12],
-    pub server_handshake_iv: [u8;12],
-    pub client_application_key: [u8;16],
-    pub client_application_iv: [u8;12],
-    pub server_application_key: [u8;16],
-    pub server_application_iv: [u8;12],
+    pub private: [u8; 32], //Vec<u8>,
+    pub handshake_secret: [u8; 32],
+    pub client_handshake_secret: [u8; 32],
+    pub client_handshake_key: [u8; 16],
+    pub server_handshake_key: [u8; 16],
+    pub client_handshake_iv: [u8; 12],
+    pub server_handshake_iv: [u8; 12],
+    pub client_application_key: [u8; 16],
+    pub client_application_iv: [u8; 12],
+    pub server_application_key: [u8; 16],
+    pub server_application_iv: [u8; 12],
 }
-
 
 pub fn random32bytes() -> [u8; 32] {
     let mut buf = [0u8; 32];
@@ -135,23 +138,22 @@ pub fn key_pair() -> Keys {
         public: public_key, // public_key.compress().to_bytes().to_vec(),
         private: private_key,
         //server_public: Vec::new(),
-        handshake_secret: [0u8;32],
-        client_handshake_secret: [0u8;32],
-        client_handshake_key: [0u8;16],
-        server_handshake_key: [0u8;16],
-        client_handshake_iv: [0u8;12],
-        server_handshake_iv: [0u8;12],
-        client_application_key: [0u8;16],
-        client_application_iv: [0u8;12],
-        server_application_key: [0u8;16],
-        server_application_iv: [0u8;12],
+        handshake_secret: [0u8; 32],
+        client_handshake_secret: [0u8; 32],
+        client_handshake_key: [0u8; 16],
+        server_handshake_key: [0u8; 16],
+        client_handshake_iv: [0u8; 12],
+        server_handshake_iv: [0u8; 12],
+        client_application_key: [0u8; 16],
+        client_application_iv: [0u8; 12],
+        server_application_key: [0u8; 16],
+        server_application_iv: [0u8; 12],
     }
 }
 
 // AEAD helper functions
 
-fn decrypt(key: &[u8;16], iv: &[u8;12], wrapper: &[u8]) -> Vec<u8> {
-
+fn decrypt(key: &[u8; 16], iv: &[u8; 12], wrapper: &[u8]) -> Vec<u8> {
     let block = aes256gcm::new_cipher(key);
     let aes_gcm = aes256gcm::new_gcm(block);
 
@@ -162,7 +164,7 @@ fn decrypt(key: &[u8;16], iv: &[u8;12], wrapper: &[u8]) -> Vec<u8> {
     return plaintext;
 }
 
-fn encrypt(key: &[u8;16], iv: &[u8;12], plaintext: &[u8], additional: &[u8]) -> Vec<u8> {
+fn encrypt(key: &[u8; 16], iv: &[u8; 12], plaintext: &[u8], additional: &[u8]) -> Vec<u8> {
     let block = aes256gcm::new_cipher(key);
     let aes_gcm = aes256gcm::new_gcm(block);
 
@@ -173,12 +175,12 @@ fn encrypt(key: &[u8;16], iv: &[u8;12], plaintext: &[u8], additional: &[u8]) -> 
     [additional.to_vec(), ciphertext].concat() // Concatenate additional data with ciphertext
 }
 
-pub fn hkdf_expand_label(secret: &[u8;32], label: &str, context: &[u8], length: u16) -> Vec<u8> {
+pub fn hkdf_expand_label(secret: &[u8; 32], label: &str, context: &[u8], length: u16) -> Vec<u8> {
     // Construct HKDF label
     let mut hkdf_label = vec![];
     hkdf_label.extend_from_slice(&length.to_be_bytes());
     let tls13_prefix = b"tls13 ";
-    hkdf_label.push((tls13_prefix.len()+label.as_bytes().len()) as u8);
+    hkdf_label.push((tls13_prefix.len() + label.as_bytes().len()) as u8);
     hkdf_label.extend_from_slice(tls13_prefix);
     hkdf_label.extend_from_slice(label.as_bytes());
 
@@ -189,48 +191,52 @@ pub fn hkdf_expand_label(secret: &[u8;32], label: &str, context: &[u8], length: 
     //println!("secret is : {:?}", &secret);
 
     // Expand using HKDF
-    let mut reader = hkdf_sha256::expand(secret, &hkdf_label[..]);//let hkdf = Hkdf::<Sha256>::new(Some(secret), &hkdf_label);
+    let mut reader = hkdf_sha256::expand(secret, &hkdf_label[..]); //let hkdf = Hkdf::<Sha256>::new(Some(secret), &hkdf_label);
     let buf = reader.read(length as usize);
     //println!("hkdf expand result is is : {:?}", &buf);
 
     buf
 }
 
-pub fn derive_secret(secret: &[u8;32], label: &str, transcript_messages: &[u8]) -> [u8; 32] {
-
-    let hash = hkdf_sha256::sum256( transcript_messages);
+pub fn derive_secret(secret: &[u8; 32], label: &str, transcript_messages: &[u8]) -> [u8; 32] {
+    let hash = hkdf_sha256::sum256(transcript_messages);
     //println!("derive_secret hash is : {:?}", &hash);
     let secret = hkdf_expand_label(secret, label, &hash, 32);
     secret.try_into().unwrap()
-
 }
 
 pub struct Session {
-    domain_name:        String,
-    conn:               TcpStream,
-    server_hello:       format::ServerHello,
-    messages:           format::Messages,
-    keys:               Keys,
-    records_sent:       u8,
-    records_received:   u8,
-    pub root_cert_sn: String
+    domain_name: String,
+    conn: TcpStream,
+    server_hello: format::ServerHello,
+    messages: format::Messages,
+    keys: Keys,
+    records_sent: u8,
+    records_received: u8,
+    pub root_cert_sn: String,
 }
 
 impl Session {
-
     pub fn new(domain: String) -> io::Result<Self> {
         let stream = TcpStream::connect(format!("{}:443", domain))?;
         let keys = key_pair();
         Ok(Session {
             domain_name: domain,
             conn: stream,
-            server_hello: ServerHello{random: [0u8;32], public_key: [0u8;32]},
-            messages: Messages{client_hello: Record::new(), server_hello: Record::new(), server_handshake: DecryptedRecord::new(),
-                encrypted_server_handshake: Record::new(), application_request: Record::new(), encrypted_ticket: Record::new(), http_response: Record::new()},
-            keys: keys,
+            server_hello: ServerHello { random: [0u8; 32], public_key: [0u8; 32] },
+            messages: Messages {
+                client_hello: Record::new(),
+                server_hello: Record::new(),
+                server_handshake: DecryptedRecord::new(),
+                encrypted_server_handshake: Record::new(),
+                application_request: Record::new(),
+                encrypted_ticket: Record::new(),
+                http_response: Record::new(),
+            },
+            keys,
             records_sent: 0,
-            records_received:0,
-            root_cert_sn: String::new()
+            records_received: 0,
+            root_cert_sn: String::new(),
         })
     }
 
@@ -254,7 +260,7 @@ impl Session {
         let mut conn = &self.conn;
         //self.Keys = key_pair();
         let client_hello = Self::client_hello(&self.domain_name, &self.keys);
-        self.messages.client_hello = Record{0:client_hello.to_vec()};
+        self.messages.client_hello = Record { 0: client_hello.to_vec() };
         network::send(&mut conn, &client_hello);
     }
 
@@ -268,11 +274,9 @@ impl Session {
         self.messages.server_hello = record.clone();
         let hello = format::parse_server_hello(&mut record.contents());
         self.server_hello = hello;
-
     }
 
-    fn parse_server_handshake(&mut self) -> bool{
-
+    fn parse_server_handshake(&mut self) -> bool {
         // ignore change cipher spec 14 03 03
         let mut record = format::read_record(&mut self.conn); // let record = tls_format::ReadRecord(&self.conn);
         if record.rtype() == 0x14 {
@@ -284,12 +288,14 @@ impl Session {
             //panic!("expected wrapper (ParseServerHandshake)");
             return false;
         }
-        let mut server_handshake_message = decrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &record.0[..]);
+        let mut server_handshake_message =
+            decrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &record.0[..]);
         //println!("server_handshake_message is : {:?}", &server_handshake_message);
-        if server_handshake_message.len()>2000 {
+        if server_handshake_message.len() > 2000 {
             self.messages.encrypted_server_handshake = record.clone();
         } else {
-            server_handshake_message = format::trunc_end_with_trailer(&server_handshake_message, 22u8);//server_handshake_message.pop();
+            server_handshake_message =
+                format::trunc_end_with_trailer(&server_handshake_message, 22u8); //server_handshake_message.pop();
             println!("server_handshake_message is : {:?}", &server_handshake_message);
             //server_handshake_message = [8u8, 0u8, 0u8, 2u8, 0u8, 0u8].to_vec();
             let mut records_received_counter = 1u8;
@@ -298,33 +304,43 @@ impl Session {
                 let record = format::read_record(&mut self.conn);
                 let mut iv = self.keys.server_handshake_iv.clone();
                 iv[11] ^= records_received_counter;
-                let mut server_handshake_message_next_part = decrypt(&self.keys.server_handshake_key, &iv, &record.0[..]);
-                server_handshake_message_next_part = format::trunc_end_with_trailer(&server_handshake_message_next_part, 22u8);// trunc end zeros with 22
+                let mut server_handshake_message_next_part =
+                    decrypt(&self.keys.server_handshake_key, &iv, &record.0[..]);
+                server_handshake_message_next_part =
+                    format::trunc_end_with_trailer(&server_handshake_message_next_part, 22u8); // trunc end zeros with 22
                 //println!("server_handshake_message_next_part is : {:?}", &server_handshake_message_next_part);
                 //let message_type = server_handshake_message_next_part[0];
-                let handshake_finish = format::contains_handshake_finish(&server_handshake_message_next_part);
+                let handshake_finish =
+                    format::contains_handshake_finish(&server_handshake_message_next_part);
                 server_handshake_message.append(&mut server_handshake_message_next_part);
                 records_received_counter += 1;
 
                 //println!("message_type is : {:?}", &message_type);
-                if handshake_finish { // if message_type==0x14 {
+                if handshake_finish {
+                    // if message_type==0x14 {
                     break;
                 }
             }
             server_handshake_message.push(22u8);
 
             let server_handshake_message_len = server_handshake_message.len() + 16;
-            let server_handhake_len_bytes = format::u16_to_bytes(server_handshake_message_len as u16);
+            let server_handhake_len_bytes =
+                format::u16_to_bytes(server_handshake_message_len as u16);
             let mut header = [23u8, 3u8, 3u8, 0u8, 0u8];
             header[3] = server_handhake_len_bytes[0];
             header[4] = server_handhake_len_bytes[1];
-            let encrypted_overall_record = encrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &server_handshake_message, &header);
-            self.messages.encrypted_server_handshake = Record{0: encrypted_overall_record};
+            let encrypted_overall_record = encrypt(
+                &self.keys.server_handshake_key,
+                &self.keys.server_handshake_iv,
+                &server_handshake_message,
+                &header,
+            );
+            self.messages.encrypted_server_handshake = Record { 0: encrypted_overall_record };
         }
-        self.messages.server_handshake = DecryptedRecord{ 0: server_handshake_message};
+        self.messages.server_handshake = DecryptedRecord { 0: server_handshake_message };
 
         self.make_application_keys();
-        if !(self.check_handshake()){
+        if !(self.check_handshake()) {
             return false;
         }
         return true;
@@ -334,23 +350,31 @@ impl Session {
         let handshake_data = self.messages.server_handshake.contents();
         //println!("check_handshake handshake_data is : {:?}", &handshake_data);
         let len_of_padding = handshake_data[3] as usize;
-        let certs_chain = &handshake_data[4+len_of_padding+1..];//let certs_chain = &handshake_data[7..];
+        let certs_chain = &handshake_data[4 + len_of_padding + 1..]; //let certs_chain = &handshake_data[7..];
 
         //println!("check_handshake certs_chain is : {:?}", &certs_chain);
 
         //next three bytes is the length of certs chain
-        let certs_chain_len = (certs_chain[0] as usize)*65536 + (certs_chain[1] as usize)*256 + (certs_chain[2] as usize);
+        let certs_chain_len = (certs_chain[0] as usize) * 65536
+            + (certs_chain[1] as usize) * 256
+            + (certs_chain[2] as usize);
         println!("certs_chain_len is : {:?}", &certs_chain_len); // must be 4205 = 4096 + 109
         if certs_chain[certs_chain_len + 3] != 0xf {
             panic!("signature not found");
         }
 
-        let sign_type = (certs_chain[certs_chain_len + 7] as u16)*256 + (certs_chain[certs_chain_len + 8] as u16);
-        if sign_type!=SHA256WITH_RSAE && sign_type!=SHA256WITH_RSA && sign_type!=ECDSA_WITH_SHA256 && sign_type!=SHA256WITH_RSAPSS {
+        let sign_type = (certs_chain[certs_chain_len + 7] as u16) * 256
+            + (certs_chain[certs_chain_len + 8] as u16);
+        if sign_type != SHA256WITH_RSAE
+            && sign_type != SHA256WITH_RSA
+            && sign_type != ECDSA_WITH_SHA256
+            && sign_type != SHA256WITH_RSAPSS
+        {
             panic!("not supported (not sha256) type of signature");
         }
 
-        let signature_len = (certs_chain[certs_chain_len + 9] as usize)*256 + (certs_chain[certs_chain_len + 10] as usize);
+        let signature_len = (certs_chain[certs_chain_len + 9] as usize) * 256
+            + (certs_chain[certs_chain_len + 10] as usize);
         println!("signature_len is : {:?}", &signature_len);
         let signature = &certs_chain[certs_chain_len + 11..certs_chain_len + 11 + signature_len];
 
@@ -359,17 +383,23 @@ impl Session {
         let now = Utc::now();
         let current_timestamp = now.timestamp(); //1000i64;// SystemTime::now()
 
-        let client_server_hello = format::concatenate(&[self.messages.client_hello.contents(),
-            self.messages.server_hello.contents(), &handshake_data[..4+len_of_padding+1+certs_chain_len+3] ]);
+        let client_server_hello = format::concatenate(&[
+            self.messages.client_hello.contents(),
+            self.messages.server_hello.contents(),
+            &handshake_data[..4 + len_of_padding + 1 + certs_chain_len + 3],
+        ]);
 
         let check_sum = hkdf_sha256::sum256(&client_server_hello).to_vec();
 
-        let context: [u8; 98] = [32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
-        32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
-        32, 84, 76, 83, 32, 49, 46, 51, 44, 32, 115, 101, 114, 118, 101, 114, 32, 67, 101, 114, 116, 105, 102, 105, 99, 97, 116, 101, 86, 101,
-        114, 105, 102, 121, 0];
+        let context: [u8; 98] = [
+            32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+            32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+            32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 84, 76,
+            83, 32, 49, 46, 51, 44, 32, 115, 101, 114, 118, 101, 114, 32, 67, 101, 114, 116, 105,
+            102, 105, 99, 97, 116, 101, 86, 101, 114, 105, 102, 121, 0,
+        ];
 
-        let check_sum_extend = format::concatenate( &[ &context, &check_sum]);
+        let check_sum_extend = format::concatenate(&[&context, &check_sum]);
 
         let check_prepared = match sign_type {
             SHA256WITH_RSAE => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
@@ -380,14 +410,16 @@ impl Session {
             SHA384WITH_RSAPSS => sha512::sum384(&check_sum_extend).to_vec(),
             SHA384WITH_RSA => sha512::sum384(&check_sum_extend).to_vec(),
             SHA384WITH_RSAE => sha512::sum384(&check_sum_extend).to_vec(),
-            _ => panic!("not supported (not sha256 or 384) type of signature")
+            _ => panic!("not supported (not sha256 or 384) type of signature"),
         };
 
         println!("client_server_hello is : {:?}", &client_server_hello);
-        let check_result = check_certs_with_known_roots(current_timestamp,
-                        &check_prepared,
-                        &certs_chain[4..certs_chain_len+1],
-                        &signature);
+        let check_result = check_certs_with_known_roots(
+            current_timestamp,
+            &check_prepared,
+            &certs_chain[4..certs_chain_len + 1],
+            &signature,
+        );
         if check_result.is_none() {
             //panic(err.Error())
             println!("error in certificates chain !");
@@ -403,30 +435,34 @@ impl Session {
     }
 
     pub fn make_application_keys(&mut self) {
-        let handshake_messages = format::concatenate( &[
+        let handshake_messages = format::concatenate(&[
             &self.messages.client_hello.contents(),
             &self.messages.server_hello.contents(),
-            &self.messages.server_handshake.contents()]
-        );
+            &self.messages.server_handshake.contents(),
+        ]);
 
         let zeros = [0u8; 32];
         let derived_secret = derive_secret(&self.keys.handshake_secret, "derived", &[]);
-        let master_secret = hkdf_sha256::extract(&zeros, &derived_secret);//let master_secret = Hkdf::<Sha256>::extract(Some(&zeros), &derived_secret);
+        let master_secret = hkdf_sha256::extract(&zeros, &derived_secret); //let master_secret = Hkdf::<Sha256>::extract(Some(&zeros), &derived_secret);
 
         let c_ap_secret = derive_secret(&master_secret, "c ap traffic", &handshake_messages);
-        self.keys.client_application_key = hkdf_expand_label(&c_ap_secret, "key", &[], 16).try_into().unwrap();
-        self.keys.client_application_iv = hkdf_expand_label(&c_ap_secret, "iv", &[], 12).try_into().unwrap();
+        self.keys.client_application_key =
+            hkdf_expand_label(&c_ap_secret, "key", &[], 16).try_into().unwrap();
+        self.keys.client_application_iv =
+            hkdf_expand_label(&c_ap_secret, "iv", &[], 12).try_into().unwrap();
 
         let s_ap_secret = derive_secret(&master_secret, "s ap traffic", &handshake_messages);
-        self.keys.server_application_key = hkdf_expand_label(&s_ap_secret, "key", &[], 16).try_into().unwrap();
-        self.keys.server_application_iv = hkdf_expand_label(&s_ap_secret, "iv", &[], 12).try_into().unwrap();
+        self.keys.server_application_key =
+            hkdf_expand_label(&s_ap_secret, "key", &[], 16).try_into().unwrap();
+        self.keys.server_application_iv =
+            hkdf_expand_label(&s_ap_secret, "iv", &[], 12).try_into().unwrap();
     }
 
-    fn client_change_cipher_spec(&mut self){
+    fn client_change_cipher_spec(&mut self) {
         network::send(&mut self.conn, &[0x14, 0x03, 0x03, 0x00, 0x01, 0x01]);
     }
 
-    fn client_handshake_finished(&mut self){
+    fn client_handshake_finished(&mut self) {
         let client_handshake_finished_msg = self.client_handshake_finished_msg();
         network::send(&mut self.conn, &client_handshake_finished_msg[..]);
     }
@@ -435,9 +471,9 @@ impl Session {
         let verify_data = self.verify_data();
 
         let mut msg = Vec::new();
-        msg.extend_from_slice(&[0x14, 0x00, 0x00, 0x20]); 
-        msg.extend_from_slice(&verify_data); 
-        msg.push(0x16); 
+        msg.extend_from_slice(&[0x14, 0x00, 0x00, 0x20]);
+        msg.extend_from_slice(&verify_data);
+        msg.push(0x16);
 
         let additional = [0x17, 0x03, 0x03, 0x00, 0x35];
 
@@ -453,45 +489,55 @@ impl Session {
 
     pub fn make_handshake_keys(&mut self) {
         let zeros = [0u8; 32];
-        let psk = [0u8; 32]; 
+        let psk = [0u8; 32];
 
         //self.server_hello.public_key=[246, 48, 130, 234, 125, 96, 179, 219, 52, 226, 168, 235, 57, 47, 53, 103, 96, 246, 129, 101, 202, 83, 142, 117, 64, 20, 47, 242, 241, 212, 56, 30];
         //println!("&self.server_hello.public_key is : {:?}", &self.server_hello.public_key);
         let shared_secret = curve25519_donna(&self.keys.private, &self.server_hello.public_key); //let shared_secret = X25519::from_slice(&self.keys.private).mul(&self.server_hello.public_key);
         //println!("shared_secret is : {:?}", shared_secret);
 
-        let early_secret = hkdf_sha256::extract(&zeros,&psk); //let (early_secret, hkdf) = Hkdf::<Sha256>::extract(Some(&zeros), &psk);
+        let early_secret = hkdf_sha256::extract(&zeros, &psk); //let (early_secret, hkdf) = Hkdf::<Sha256>::extract(Some(&zeros), &psk);
         let derived_secret = derive_secret(&early_secret, "derived", &[]);
         //println!("derived_secret is : {:?}", derived_secret);
-        self.keys.handshake_secret = hkdf_sha256::extract(&shared_secret, &derived_secret);//self.keys.handshake_secret = Hkdf::<Sha256>::extract(Some(&shared_secret), &derived_secret);
+        self.keys.handshake_secret = hkdf_sha256::extract(&shared_secret, &derived_secret); //self.keys.handshake_secret = Hkdf::<Sha256>::extract(Some(&shared_secret), &derived_secret);
         //println!("self.keys.handshake_secret is : {:?}", self.keys.handshake_secret);
 
-        let handshake_messages = format::concatenate(
-            &[&self.messages.client_hello.contents(),
-            &self.messages.server_hello.contents()]
-        );
+        let handshake_messages = format::concatenate(&[
+            &self.messages.client_hello.contents(),
+            &self.messages.server_hello.contents(),
+        ]);
         //println!("handshake_messages is : {:?}", handshake_messages);
         //let handshake_messages = vec![1, 0, 0, 157, 3, 3, 27, 126, 189, 42, 117, 227, 85, 44, 186, 155, 29, 86, 176, 221, 181, 209, 227, 24, 67, 227, 112, 232, 244, 106, 59, 250, 1, 175, 102, 253, 52, 236, 0, 0, 2, 19, 1, 1, 0, 0, 114, 0, 0, 0, 23, 0, 21, 0, 0, 18, 119, 119, 119, 46, 103, 111, 111, 103, 108, 101, 97, 112, 105, 115, 46, 99, 111, 109,
-                                      //0, 10, 0, 4, 0, 2, 0, 29, 0, 13, 0, 20, 0, 18, 4, 3, 8, 4, 4, 1, 5, 3, 8, 5, 5, 1, 8, 6, 6, 1, 2, 1, 0, 51, 0, 38, 0, 36, 0, 29, 0, 32, 192, 66, 56, 95, 6, 86, 129, 217, 28, 232, 5, 177, 109, 189, 139, 154, 6, 3, 215, 62, 202, 195, 214, 238, 231, 82, 157, 198, 107, 200, 81, 16, 0, 45, 0, 2, 1, 1, 0, 43, 0, 3, 2, 3, 4, 2, 0, 0, 86, 3, 3, 8, 215, 19, 207, 58, 155, 125, 3, 157, 121, 43, 159, 152, 229, 77, 159, 41, 50, 150, 5, 171, 174, 144, 47, 121, 11, 241, 132, 255, 77, 16, 244, 0, 19, 1, 0, 0, 46, 0, 51, 0, 36, 0, 29, 0, 32, 246, 48, 130, 234, 125, 96, 179, 219, 52, 226, 168, 235, 57, 47, 53, 103, 96, 246, 129, 101, 202, 83, 142, 117, 64, 20, 47, 242, 241, 212, 56, 30, 0, 43, 0, 2, 3, 4];
+        //0, 10, 0, 4, 0, 2, 0, 29, 0, 13, 0, 20, 0, 18, 4, 3, 8, 4, 4, 1, 5, 3, 8, 5, 5, 1, 8, 6, 6, 1, 2, 1, 0, 51, 0, 38, 0, 36, 0, 29, 0, 32, 192, 66, 56, 95, 6, 86, 129, 217, 28, 232, 5, 177, 109, 189, 139, 154, 6, 3, 215, 62, 202, 195, 214, 238, 231, 82, 157, 198, 107, 200, 81, 16, 0, 45, 0, 2, 1, 1, 0, 43, 0, 3, 2, 3, 4, 2, 0, 0, 86, 3, 3, 8, 215, 19, 207, 58, 155, 125, 3, 157, 121, 43, 159, 152, 229, 77, 159, 41, 50, 150, 5, 171, 174, 144, 47, 121, 11, 241, 132, 255, 77, 16, 244, 0, 19, 1, 0, 0, 46, 0, 51, 0, 36, 0, 29, 0, 32, 246, 48, 130, 234, 125, 96, 179, 219, 52, 226, 168, 235, 57, 47, 53, 103, 96, 246, 129, 101, 202, 83, 142, 117, 64, 20, 47, 242, 241, 212, 56, 30, 0, 43, 0, 2, 3, 4];
 
-        let c_hs_secret = derive_secret(&self.keys.handshake_secret, "c hs traffic", &handshake_messages);
+        let c_hs_secret =
+            derive_secret(&self.keys.handshake_secret, "c hs traffic", &handshake_messages);
         self.keys.client_handshake_secret = c_hs_secret.clone();
-        self.keys.client_handshake_key = hkdf_expand_label(&c_hs_secret, "key", &[], 16).try_into().unwrap();
+        self.keys.client_handshake_key =
+            hkdf_expand_label(&c_hs_secret, "key", &[], 16).try_into().unwrap();
         //println!("self.keys.client_handshake_key is : {:?}", self.keys.client_handshake_key);
-        self.keys.client_handshake_iv = hkdf_expand_label(&c_hs_secret, "iv", &[], 12).try_into().unwrap();
+        self.keys.client_handshake_iv =
+            hkdf_expand_label(&c_hs_secret, "iv", &[], 12).try_into().unwrap();
         //println!("self.keys.client_handshake_iv is : {:?}", self.keys.client_handshake_iv);
 
-        let s_hs_secret = derive_secret(&self.keys.handshake_secret, "s hs traffic", &handshake_messages);
+        let s_hs_secret =
+            derive_secret(&self.keys.handshake_secret, "s hs traffic", &handshake_messages);
         //let session_keys_server_handshake_key = hkdf_expand_label(&s_hs_secret, "key", &[], 16);
         //println!("session_keys_server_handshake_key_ is : {:?}", &session_keys_server_handshake_key);
-        self.keys.server_handshake_key = hkdf_expand_label(&s_hs_secret, "key", &[], 16).try_into().unwrap();
-        self.keys.server_handshake_iv = hkdf_expand_label(&s_hs_secret, "iv", &[], 12).try_into().unwrap();
+        self.keys.server_handshake_key =
+            hkdf_expand_label(&s_hs_secret, "key", &[], 16).try_into().unwrap();
+        self.keys.server_handshake_iv =
+            hkdf_expand_label(&s_hs_secret, "iv", &[], 12).try_into().unwrap();
     }
 
     pub fn verify_data(&self) -> Vec<u8> {
-        let finished_key = hkdf_expand_label(&self.keys.client_handshake_secret, "finished", &[], 32);
+        let finished_key =
+            hkdf_expand_label(&self.keys.client_handshake_secret, "finished", &[], 32);
         let handshake_log = format::concatenate(&[
-            self.messages.client_hello.contents(), self.messages.server_hello.contents(), self.messages.server_handshake.contents()] );
+            self.messages.client_hello.contents(),
+            self.messages.server_hello.contents(),
+            self.messages.server_handshake.contents(),
+        ]);
         let finished_hash = hkdf_sha256::sum256(&handshake_log[..]);
         let mut hm = Hmac::new(&finished_key);
         hm.write(&finished_hash);
@@ -499,28 +545,32 @@ impl Session {
     }
 
     //pub fn send_data(&mut self, data: &[u8]) -> io::Result<()> {
-        //self.conn.write_all(data)?;
-        //Ok(())
+    //self.conn.write_all(data)?;
+    //Ok(())
     //}
     pub fn send_data(&mut self, data: &[u8]) {
         let msg = self.encrypt_application_data(&data);
 
         println!("send_data msg is : {:?}", msg);
-        self.records_sent +=1;
-        self.conn.write(&msg[..]);// self.conn.write_all(data)?;
-        self.messages.application_request = Record{0:msg};
+        self.records_sent += 1;
+        self.conn.write(&msg[..]); // self.conn.write_all(data)?;
+        self.messages.application_request = Record { 0: msg };
     }
 
-    pub fn receive_data(&mut self) -> Vec<u8> { // receive ticket
+    pub fn receive_data(&mut self) -> Vec<u8> {
+        // receive ticket
         let record = format::read_record(&mut self.conn);
         println!("gotten record is : {:?}", &record.0);
         let mut iv = self.keys.server_application_iv.clone();
         iv[11] ^= self.records_received;
         println!("receive_data iv is : {:?}", &iv);
-        println!("receive_data self.keys.server_application_key is : {:?}", &self.keys.server_application_key);
+        println!(
+            "receive_data self.keys.server_application_key is : {:?}",
+            &self.keys.server_application_key
+        );
         let plaintext = decrypt(&self.keys.server_application_key, &iv, &record.0[..]);
         println!("decrypted record is : {:?}", &plaintext);
-        self.records_received +=1;
+        self.records_received += 1;
         self.messages.encrypted_ticket = record;
         plaintext
     }
@@ -538,7 +588,8 @@ impl Session {
             //response.push(23);
 
             // Check whether the end of the response matches the desired sequence
-            if pt.len() >= 5 && &pt[pt.len() - 4..] == &[0x0D, 0x0A, 0x0D, 0x0A] { // if pt.len() >= 5 && &pt[pt.len() - 5..] == &[0x0D, 0x0A, 0x0D, 0x0A, 0x17] {
+            if pt.len() >= 5 && &pt[pt.len() - 4..] == &[0x0D, 0x0A, 0x0D, 0x0A] {
+                // if pt.len() >= 5 && &pt[pt.len() - 5..] == &[0x0D, 0x0A, 0x0D, 0x0A, 0x17] {
                 break;
             }
         }
@@ -547,20 +598,21 @@ impl Session {
     }
 
     fn receive_http_data(&mut self) -> Vec<u8> {
-        let record = format::read_record(&mut self.conn); 
-        let mut iv = vec![0u8; 12]; 
+        let record = format::read_record(&mut self.conn);
+        let mut iv = vec![0u8; 12];
 
         println!("receive_http_data record is : {:?}", &record.0[..]);
         iv.copy_from_slice(&self.keys.server_application_iv);
 
         iv[11] ^= self.records_received as u8;
 
-        let plaintext = decrypt(&self.keys.server_application_key, &iv.try_into().unwrap(), &record.0[..]);
+        let plaintext =
+            decrypt(&self.keys.server_application_key, &iv.try_into().unwrap(), &record.0[..]);
         println!("receive_http_data plaintext is : {:?}", &plaintext);
 
         self.records_received += 1;
 
-        self.messages.http_response.0.extend(record.0);// add to sequence of ciphertexts
+        self.messages.http_response.0.extend(record.0); // add to sequence of ciphertexts
 
         plaintext
     }
@@ -570,53 +622,60 @@ impl Session {
         println!("encrypt_application_data data.len() is : {:?}", &data.len());
         data_vec.push(0x17);
         let additional_length = (data_vec.len() + 16) as u16;
-        let additional = format::concatenate(&[
-            &[0x17, 0x03, 0x03], &format::u16_to_bytes(additional_length)
-        ]);
+        let additional =
+            format::concatenate(&[&[0x17, 0x03, 0x03], &format::u16_to_bytes(additional_length)]);
         println!("encrypt_application_data additional is : {:?}", &additional);
-        encrypt(&self.keys.client_application_key, &self.keys.client_application_iv, &data_vec[..], &additional[..])
+        encrypt(
+            &self.keys.client_application_key,
+            &self.keys.client_application_iv,
+            &data_vec[..],
+            &additional[..],
+        )
     }
 
     pub fn client_hello(name: &str, keys: &Keys) -> Vec<u8> {
         let extensions = format::concatenate(&[
             &format::extension(0x0, format::server_name(name)), // SNI extension
             &format::extension(0x0a, vec![0x00, 0x02, 0x00, 0x1d]), // groups
-            &format::extension(0x0d, vec![
-                0x00, 0x12, 0x04, 0x03,
-                0x08, 0x04, 0x04, 0x01,
-                0x05, 0x03, 0x08, 0x05,
-                0x05, 0x01, 0x08, 0x06,
-                0x06, 0x01, 0x02, 0x01
-            ]), // Signature algorithms
+            &format::extension(
+                0x0d,
+                vec![
+                    0x00, 0x12, 0x04, 0x03, 0x08, 0x04, 0x04, 0x01, 0x05, 0x03, 0x08, 0x05, 0x05,
+                    0x01, 0x08, 0x06, 0x06, 0x01, 0x02, 0x01,
+                ],
+            ), // Signature algorithms
             &format::extension(0x33, format::key_share(&keys.public)), // Key share
-            &format::extension(0x2d, vec![0x01, 0x01]), // PSK (no effect)
-            &format::extension(0x2b, vec![0x02, 0x03, 0x04]) // TLS version
-        ]
+            &format::extension(0x2d, vec![0x01, 0x01]),         // PSK (no effect)
+            &format::extension(0x2b, vec![0x02, 0x03, 0x04]),   // TLS version
+        ]);
+
+        let handshake = format::concatenate(
+            &[
+                &[0x03, 0x03],                                  // Client version: TLS 1.2
+                &random32bytes(),                               // Client random
+                &[0x00],                                        // No session id
+                &[0x00, 0x02, 0x13, 0x01], // Cipher suites: TLS_AES_128_GCM_SHA256
+                &[0x01, 0x00],             // Cipher suite length
+                &format::u16_to_bytes(extensions.len() as u16), // Extensions length
+                &extensions,
+            ], // Extensions
         );
 
-        let handshake = format::concatenate( &[
-            &[0x03, 0x03], // Client version: TLS 1.2
-            &random32bytes(),   // Client random
-            &[0x00],       // No session id
-            &[0x00, 0x02, 0x13, 0x01], // Cipher suites: TLS_AES_128_GCM_SHA256
-            &[0x01, 0x00], // Cipher suite length
-            &format::u16_to_bytes(extensions.len() as u16), // Extensions length
-            &extensions] // Extensions
-        );
-
-        format::concatenate( &[
-            &[0x16, 0x03, 0x01], // Handshake
-            &format::u16_to_bytes((handshake.len() + 4) as u16), // Length of handshake
-            &[0x01, 0x00], // Handshake type
-            &format::u16_to_bytes(handshake.len() as u16), // Handshake length
-            &handshake] // Handshake
+        format::concatenate(
+            &[
+                &[0x16, 0x03, 0x01],                                 // Handshake
+                &format::u16_to_bytes((handshake.len() + 4) as u16), // Length of handshake
+                &[0x01, 0x00],                                       // Handshake type
+                &format::u16_to_bytes(handshake.len() as u16),       // Handshake length
+                &handshake,
+            ], // Handshake
         )
     }
 
     pub fn serialize(&mut self) -> Vec<u8> {
         let mut res = self.keys.private.to_vec();
-        res.push(self.records_sent);// messages sent
-        res.push(self.records_received);// messages received
+        res.push(self.records_sent); // messages sent
+        res.push(self.records_received); // messages received
         res.extend(&self.messages.client_hello.0); // send client hello
         res.extend(&self.messages.server_hello.0); // get server hello
         // may be add change cipher spec 14 03 03 ...
@@ -718,9 +777,9 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     //let c_hs_secret = derive_secret(&handshake_secret, "c hs traffic", &handshake_messages);
     //let client_handshake_secret = c_hs_secret.clone();
     //let client_handshake_key: [u8; 16] =
-        //hkdf_expand_label(&c_hs_secret, "key", &[], 16).try_into().unwrap();
+    //hkdf_expand_label(&c_hs_secret, "key", &[], 16).try_into().unwrap();
     //let client_handshake_iv: [u8; 12] =
-        //hkdf_expand_label(&c_hs_secret, "iv", &[], 12).try_into().unwrap();
+    //hkdf_expand_label(&c_hs_secret, "iv", &[], 12).try_into().unwrap();
 
     let s_hs_secret = derive_secret(&handshake_secret, "s hs traffic", &handshake_messages);
     // let session_keys_server_handshake_key = hkdf_expand_label(&s_hs_secret,
@@ -924,8 +983,6 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
 
     return vec![0u8, 3u8, 43u8]; // "kid not found "
 }
-
-
 
 /*
 #[test]

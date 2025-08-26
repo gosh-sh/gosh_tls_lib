@@ -1,25 +1,28 @@
-
-use num_bigint::{BigInt, Sign};
 //use core::ops::Shl;
 use std::ops::{Add, Shl};
 use std::str::FromStr;
-use num_integer::Integer;
 
-use num_traits::{Num, Zero, One, Signed};
+use num_bigint::BigInt;
+use num_bigint::Sign;
+use num_integer::Integer;
+use num_traits::Num;
+use num_traits::One;
+use num_traits::Signed;
+use num_traits::Zero;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Curve {
-    pub p: BigInt, // the order of the underlying field
-    pub n: BigInt, // the order of the base point
-    pub b: BigInt, // the constant of the curve equation
-    pub gx: BigInt, // x coordinate of the base point
-    pub gy: BigInt, // y coordinate of the base point
+    pub p: BigInt,       // the order of the underlying field
+    pub n: BigInt,       // the order of the base point
+    pub b: BigInt,       // the constant of the curve equation
+    pub gx: BigInt,      // x coordinate of the base point
+    pub gy: BigInt,      // y coordinate of the base point
     pub bit_size: usize, // the size of the underlying field
-    pub name: String, // the canonical name of the curve
+    pub name: String,    // the canonical name of the curve
 }
 
 impl Curve {
-    pub fn n_minus2(&self) -> BigInt{
+    pub fn n_minus2(&self) -> BigInt {
         &self.n - BigInt::from(2)
     }
 
@@ -51,7 +54,8 @@ impl Curve {
             return false; // return matches_specific_curve(self).unwrap().is_on_curve(x, y);
         }
 
-        if x < &BigInt::zero() || x >= &self.p || y < &BigInt::zero() || y >= &self.p { // if x < &0 || x >= &self.p || y < &0 || y >= &self.p {
+        if x < &BigInt::zero() || x >= &self.p || y < &BigInt::zero() || y >= &self.p {
+            // if x < &0 || x >= &self.p || y < &0 || y >= &self.p {
             return false;
         }
 
@@ -61,13 +65,8 @@ impl Curve {
     }
 
     pub fn z_for_affine(x: &BigInt, y: &BigInt) -> BigInt {
-        if x.is_zero() && y.is_zero() {
-            BigInt::zero()
-        } else {
-            BigInt::from(1)
-        }
+        if x.is_zero() && y.is_zero() { BigInt::zero() } else { BigInt::from(1) }
     }
-
 
     pub fn affine_from_jacobian(&self, x: &BigInt, y: &BigInt, z: &BigInt) -> (BigInt, BigInt) {
         if z.is_zero() {
@@ -86,7 +85,7 @@ impl Curve {
 
     pub fn add(&self, x1: &BigInt, y1: &BigInt, x2: &BigInt, y2: &BigInt) -> (BigInt, BigInt) {
         //if matches_specific_curve(self).is_some() {
-            //return matches_specific_curve(self).unwrap().add(x1, y1, x2, y2);
+        //return matches_specific_curve(self).unwrap().add(x1, y1, x2, y2);
         //}
         if !matches_specific_curve(self).is_some() {
             panic!("unknown curve");
@@ -102,7 +101,15 @@ impl Curve {
         self.affine_from_jacobian(&point.0, &point.1, &point.2)
     }
 
-    pub fn add_jacobian(&self, x1: &BigInt, y1: &BigInt, z1: &BigInt, x2: &BigInt, y2: &BigInt, z2: &BigInt) -> (BigInt, BigInt, BigInt) {
+    pub fn add_jacobian(
+        &self,
+        x1: &BigInt,
+        y1: &BigInt,
+        z1: &BigInt,
+        x2: &BigInt,
+        y2: &BigInt,
+        z2: &BigInt,
+    ) -> (BigInt, BigInt, BigInt) {
         let mut x3 = BigInt::zero();
         let mut y3 = BigInt::zero();
         let mut z3 = BigInt::zero();
@@ -215,7 +222,7 @@ impl Curve {
 
     pub fn scalar_mult(&self, bx: &BigInt, by: &BigInt, k: &[u8]) -> (BigInt, BigInt) {
         //if let Some(specific) = matches_specific_curve(self) {
-            //return specific.scalar_mult(bx, by, k);
+        //return specific.scalar_mult(bx, by, k);
         //}
         if !matches_specific_curve(self).is_some() {
             panic!("unknown curve");
@@ -240,12 +247,12 @@ impl Curve {
         }
         let res = self.affine_from_jacobian(&x, &y, &z);
 
-        res//self.affine_from_jacobian(&x, &y, &z)
+        res //self.affine_from_jacobian(&x, &y, &z)
     }
 
     pub fn scalar_base_mult(&self, k: &[u8]) -> (BigInt, BigInt) {
         //if let Some(specific) = matches_specific_curve(self) {
-            //return specific.scalar_base_mult(k);
+        //return specific.scalar_base_mult(k);
         //}
 
         if !matches_specific_curve(self).is_some() {
@@ -274,81 +281,79 @@ impl Curve {
         buf[1 + byte_len..1 + 2 * byte_len].copy_from_slice(&y.to_bytes_le());
         Some(self.new_point().set_bytes(&buf))
     }*/
-
 }
 
 // The function checks if the parameters match one of the specific curves
 pub fn matches_specific_curve(params: &Curve) -> Option<Curve> {
     for curve in &[p224, p256, p384, p521] {
-
         //let current_params = (curve)().params();
-        if params == (curve)().params() { // if params == &(curve)().params() {
+        if params == (curve)().params() {
+            // if params == &(curve)().params() {
             return Some(params.clone());
         }
     }
     None
-}/*
+} /*
 
 
 const MASK: [u8; 8] = [0xff, 0x1, 0x3, 0x7, 0xf, 0x1f, 0x3f, 0x7f];
 
 //pub fn generate_key<R: Read>(curve: &Curve, rand: &mut R) -> io::Result<(Vec<u8>, BigInt, BigInt)> {
-    //let n = curve.params().n.clone();
-    //let bit_size = n.bits();
-    //let byte_len = (bit_size + 7) / 8;
-    //let mut priv_key = vec![0u8; byte_len];
+//let n = curve.params().n.clone();
+//let bit_size = n.bits();
+//let byte_len = (bit_size + 7) / 8;
+//let mut priv_key = vec![0u8; byte_len];
 
-    //let mut x = BigInt::zero();
-    //let mut y = BigInt::zero();
+//let mut x = BigInt::zero();
+//let mut y = BigInt::zero();
 
-    //while x.is_zero() && y.is_zero() {
-        //rand.read_exact(&mut priv_key)?;
+//while x.is_zero() && y.is_zero() {
+//rand.read_exact(&mut priv_key)?;
 
-        //priv_key[0] &= MASK[(bit_size % 8) as usize];
+//priv_key[0] &= MASK[(bit_size % 8) as usize];
 
-        //priv_key[1] ^= 0x42;
+//priv_key[1] ^= 0x42;
 
-        //if BigInt::from_bytes_be(num::BigUint::from_bytes_be(&priv_key)) >= n {
-            //continue;
-        //}
+//if BigInt::from_bytes_be(num::BigUint::from_bytes_be(&priv_key)) >= n {
+//continue;
+//}
 
-        //let (new_x, new_y) = curve.scalar_base_mult(&priv_key);
-        //x = new_x;
-        //y = new_y;
-    //}
-    //Ok((priv_key, x, y))
+//let (new_x, new_y) = curve.scalar_base_mult(&priv_key);
+//x = new_x;
+//y = new_y;
+//}
+//Ok((priv_key, x, y))
 //}
 
 pub fn marshal(curve: &Curve, x: &BigInt, y: &BigInt) -> Vec<u8> {
-    panic_if_not_on_curve(curve, x, y);
+panic_if_not_on_curve(curve, x, y);
 
-    let byte_len = (curve.params().bit_size + 7) / 8;
-    let mut ret = vec![0; 1 + 2 * byte_len];
+let byte_len = (curve.params().bit_size + 7) / 8;
+let mut ret = vec![0; 1 + 2 * byte_len];
 
-    ret[0] = 4; // uncompressed point
-    ret[1..1 + byte_len].copy_from_slice(&x.to_bytes_be());
-    ret[1 + byte_len..1 + 2 * byte_len].copy_from_slice(&y.to_bytes_be());
+ret[0] = 4; // uncompressed point
+ret[1..1 + byte_len].copy_from_slice(&x.to_bytes_be());
+ret[1 + byte_len..1 + 2 * byte_len].copy_from_slice(&y.to_bytes_be());
 
-    ret
+ret
 }
 
 pub fn marshal_compressed(curve: &dyn Curve, x: &BigInt, y: &BigInt) -> Vec<u8> {
-    panic_if_not_on_curve(curve, x, y);
-    let byte_len = (curve.params().bit_size + 7) / 8;
-    let mut compressed = vec![0; 1 + byte_len];
-    compressed[0] = if y.is_odd() { 3 } else { 2 };
-    compressed[1..].copy_from_slice(&x.to_bytes_be());
-    compressed
+panic_if_not_on_curve(curve, x, y);
+let byte_len = (curve.params().bit_size + 7) / 8;
+let mut compressed = vec![0; 1 + byte_len];
+compressed[0] = if y.is_odd() { 3 } else { 2 };
+compressed[1..].copy_from_slice(&x.to_bytes_be());
+compressed
 }*/
 
-
 pub fn unmarshal(curve: &Curve, data: &[u8]) -> (BigInt, BigInt) {
-
     let byte_len = (&curve.params().bit_size + 7) / 8;
-    if data.len() != 1 + 2*byte_len {
+    if data.len() != 1 + 2 * byte_len {
         return (BigInt::zero(), BigInt::zero());
     }
-    if data[0] != 4 { // uncompressed form
+    if data[0] != 4 {
+        // uncompressed form
         return (BigInt::zero(), BigInt::zero());
     }
     let p = curve.params().p.clone();
@@ -407,31 +412,53 @@ pub fn panic_if_not_on_curve(curve: &Curve, x: &BigInt, y: &BigInt) {
     }
 }
 
-pub fn p224() -> Curve { // -> &'static dyn Curve {
+pub fn p224() -> Curve {
+    // -> &'static dyn Curve {
 
-    Curve{
+    Curve {
         name: String::from("P-224"),
         bit_size: 224,
-        p: BigInt::from_str("26959946667150639794667015087019630673557916260026308143510066298881").unwrap(),
-        n: BigInt::from_str("26959946667150639794667015087019625940457807714424391721682722368061").unwrap(),
-        b: BigInt::from_str_radix("b4050a850c04b3abf54132565044b0b7d7bfd8ba270b39432355ffb4", 16).unwrap(),
-        gx: BigInt::from_str_radix("b70e0cbd6bb4bf7f321390b94a03c1d356c21122343280d6115c1d21", 16).unwrap(),
-        gy: BigInt::from_str_radix("bd376388b5f723fb4c22dfe6cd4375a05a07476444d5819985007e34", 16).unwrap(),
+        p: BigInt::from_str("26959946667150639794667015087019630673557916260026308143510066298881")
+            .unwrap(),
+        n: BigInt::from_str("26959946667150639794667015087019625940457807714424391721682722368061")
+            .unwrap(),
+        b: BigInt::from_str_radix("b4050a850c04b3abf54132565044b0b7d7bfd8ba270b39432355ffb4", 16)
+            .unwrap(),
+        gx: BigInt::from_str_radix("b70e0cbd6bb4bf7f321390b94a03c1d356c21122343280d6115c1d21", 16)
+            .unwrap(),
+        gy: BigInt::from_str_radix("bd376388b5f723fb4c22dfe6cd4375a05a07476444d5819985007e34", 16)
+            .unwrap(),
     }
-
 }
 
 pub fn p256() -> Curve {
-    Curve{
+    Curve {
         name: String::from("P-256"),
         bit_size: 256,
-        p: BigInt::from_str("115792089210356248762697446949407573530086143415290314195533631308867097853951").unwrap(),
-        n: BigInt::from_str("115792089210356248762697446949407573529996955224135760342422259061068512044369").unwrap(),
-        b: BigInt::from_str_radix("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b", 16).unwrap(),
-        gx: BigInt::from_str_radix("6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296", 16).unwrap(),
-        gy: BigInt::from_str_radix("4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",16).unwrap(),
+        p: BigInt::from_str(
+            "115792089210356248762697446949407573530086143415290314195533631308867097853951",
+        )
+        .unwrap(),
+        n: BigInt::from_str(
+            "115792089210356248762697446949407573529996955224135760342422259061068512044369",
+        )
+        .unwrap(),
+        b: BigInt::from_str_radix(
+            "5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b",
+            16,
+        )
+        .unwrap(),
+        gx: BigInt::from_str_radix(
+            "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
+            16,
+        )
+        .unwrap(),
+        gy: BigInt::from_str_radix(
+            "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
+            16,
+        )
+        .unwrap(),
     }
-
 }
 
 pub fn p384() -> Curve {
@@ -444,7 +471,6 @@ pub fn p384() -> Curve {
         gx: BigInt::from_str_radix("aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7", 16).unwrap(),
         gy: BigInt::from_str_radix("3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f", 16).unwrap(),
     }
-
 }
 
 pub fn p521() -> Curve {
@@ -469,7 +495,7 @@ fn hash_to_int(hash: &[u8], c: &Curve) -> BigInt {
     }
 
     let mut ret = BigInt::from_bytes_be(num_bigint::Sign::Plus, &hash); // Transforms to BigInt
-    let excess = hash.len()*8 - order_bits; // Calculating the excess bits
+    let excess = hash.len() * 8 - order_bits; // Calculating the excess bits
     if excess > 0 {
         ret >>= excess; // Move to the right
     }
@@ -490,8 +516,8 @@ pub fn verify(pub_key: &PublicKey, hash: &[u8], r: &BigInt, s: &BigInt) -> bool 
 
     verify_nistec(pub_key, &hash, &r, &s)
     //match encode_signature(&r.to_bytes_be().1, &s.to_bytes_be().1) {
-        //Ok(sig) => verify_asn1(pub_key, hash, &sig),
-        //Err(_) => false,
+    //Ok(sig) => verify_asn1(pub_key, hash, &sig),
+    //Err(_) => false,
     //}
 }
 
@@ -521,7 +547,8 @@ pub fn verify_nistec(pub_key: &PublicKey, hash: &[u8], r: &BigInt, s: &BigInt) -
     let (x2, y2) = c.scalar_mult(&pub_key.x, &pub_key.y, &u2.to_bytes_be().1);
     let (x, y) = c.add(&x1, &y1, &x2, &y2); // Adding up the points
 
-    if x.is_zero() && y.is_zero() { // Checking if a point is infinity
+    if x.is_zero() && y.is_zero() {
+        // Checking if a point is infinity
         return false;
     }
 
@@ -534,10 +561,11 @@ pub fn mod_inverse(g: &BigInt, n: &BigInt) -> Option<BigInt> {
     let mut g = g.clone();
 
     // GCD expects parameters a and b to be > 0.
-    if n.sign()==Sign::Minus {
+    if n.sign() == Sign::Minus {
         n = n.abs() // Transforms n to positive
     }
-    if g.sign()==Sign::Minus { // if g.neg {
+    if g.sign() == Sign::Minus {
+        // if g.neg {
         g = g.add(&n); // g = g.modulus(&n)?;
     }
 
@@ -545,15 +573,15 @@ pub fn mod_inverse(g: &BigInt, n: &BigInt) -> Option<BigInt> {
 
     // if and only if d == 1, g and n are relatively prime
     //if d != BigInt::from(1) {
-        //return None;
+    //return None;
     //}
 
     // x and y are such that g * x + n * y = 1, so x is the inverse element.
     // but it can be negative, so we transform it into the range 0 <= z < |n|
     //if x.sign()==Sign::Minus { // if x.neg {
-        //Some(x.add(&n))
+    //Some(x.add(&n))
     //} else {
-        //Some(x) //self.set(&x);
+    //Some(x) //self.set(&x);
     //}
 
     //Some(self.clone())
@@ -563,7 +591,8 @@ pub fn mod_inverse(g: &BigInt, n: &BigInt) -> Option<BigInt> {
 }
 
 // Find greatest common divisor of a and b.
-pub fn gcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt) { // pub fn gcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
+pub fn gcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt) {
+    // pub fn gcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
     let mut x0 = BigInt::zero();
     let mut x1 = BigInt::one();
     let mut y0 = BigInt::one();
@@ -582,11 +611,11 @@ pub fn gcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt) { // pub fn gcd(a: &BigIn
 
         // Refresh coefficients of x and y
         let x_temp = x1.clone();
-        x1 = &x0 - &(&q  &x1);
+        x1 = &x0 - &(&q & x1);
         x0 = x_temp;
 
         let y_temp = y1.clone();
-        y1 = &y0 - &(&q  &y1);
+        y1 = &y0 - &(&q & y1);
         y0 = y_temp;
     }
 

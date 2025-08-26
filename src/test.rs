@@ -1,15 +1,11 @@
-use crate::tls_connect::get_jwk_tls_data;
+use chrono::Utc;
+use hex::FromHex;
 
 use crate::format;
-
+use crate::tls_connect::get_jwk_tls_data;
 //use crate::tls_session::Session;
 use crate::tls_connect::*;
 use crate::tls_session;
-
-
-use hex::FromHex;
-
-use chrono::Utc;
 
 fn deserialize_from_hex_str(data: &str) -> Result<Vec<u8>, hex::FromHexError> {
     Vec::from_hex(data)
@@ -49,7 +45,7 @@ fn main_test() {
 
     println!("root certs map: {:?}", get_root_certs_map(domain).unwrap());
 
-    let tls_session_hex =  tls_session.1;
+    let tls_session_hex = tls_session.1;
     let mut tls_session_bytes = hex::decode(tls_session_hex.clone()).unwrap();
 
     //println!("tls_session_hex: {:?}", tls_session_hex);
@@ -63,8 +59,7 @@ fn main_test() {
 
     //println!("cert 2: {:?}", hex::encode(data));
 
-
-    let current_timestamp = Utc::now().timestamp() as u32;// SystemTime::now()
+    let current_timestamp = Utc::now().timestamp() as u32; // SystemTime::now()
     let mut data: Vec<u8> = Vec::new();
     append_uint32(&mut data, current_timestamp);
     println!("tls_session_bytes is : {:?}", tls_session_bytes);
@@ -94,6 +89,4 @@ fn main_test() {
 
     println!("jwk public_key_data is : {:?}", public_key_data);
     println!("jwk public_key_data hex is : {:?}", hex::encode(public_key_data));
-    
 }
-
