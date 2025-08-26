@@ -1,4 +1,4 @@
-use std::io::{self, Read};
+use std::io::Read;
 use std::net::TcpStream;
 
 use chrono::{DateTime, FixedOffset, TimeZone};

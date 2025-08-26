@@ -6,27 +6,22 @@ mod x25519;
 mod sha512;
 
 use std::collections::HashMap;
-use num_bigint::BigInt;
 use x25519::{curve25519_donna, BASE_POINT};
 use format::*;
-use network::send;
 use hkdf_sha256::*;
-use certs::check_certs;
 
 use std::io::{self, Write};
 use std::net::TcpStream;
-use std::ops::Mul;
 
 use chrono::Utc;
 //use base64::decode;
 use base64url::decode;
 use hex::FromHex;
 
-use rand::{RngCore, thread_rng};
+use rand::RngCore;
 use crate::{network, format};
 use crate::tls_session::certs::{check_certs_with_fixed_root, check_certs_with_known_roots}; // Для генерации случайных данных
 
-use std::fs::File;
 
 //const UnknownSignatureAlgorithm: u16 = 0;
 //const MD2WithRSA: u16 = 1;  // Unsupported.
@@ -264,7 +259,7 @@ impl Session {
     }
 
     pub fn get_server_hello(&mut self) {
-        let mut record = format::read_record(&mut self.conn);
+        let record = format::read_record(&mut self.conn);
         if record.rtype() != 0x16 {
             //panic("expected server hello")
             println!("expected server hello ")
@@ -906,7 +901,7 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         let current_decoded_kid = Vec::from_hex(substring).unwrap();
 
         if current_decoded_kid.eq(&kid.to_vec()) {
-            let mut current_decoded_n = decode(&strings_n[counter]).unwrap();
+            let current_decoded_n = decode(&strings_n[counter]).unwrap();
             let mut result = vec![1u8];
 
             append_uint64(&mut result, expires_timestamp as u64);

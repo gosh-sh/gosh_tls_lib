@@ -1,6 +1,5 @@
 
-use num_bigint::{BigInt, Sign, ToBigInt};
-use num_bigint::BigUint;
+use num_bigint::{BigInt, Sign};
 //use core::ops::Shl;
 use std::ops::{Add, Shl};
 use std::str::FromStr;
@@ -170,7 +169,7 @@ impl Curve {
 
         let alpha2 = (x + &delta).mod_floor(&self.p);
         alpha = alpha * &alpha2;
-        let mut alpha_lsh = &alpha << 1; // Alpha << 1 represents 2α
+        let alpha_lsh = &alpha << 1; // Alpha << 1 represents 2α
         alpha = &alpha + &alpha_lsh;
 
         let beta = x * &gamma;

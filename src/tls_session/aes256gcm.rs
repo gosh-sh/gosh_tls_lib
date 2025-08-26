@@ -768,7 +768,7 @@ impl Gcm {
 			panic!("NewGCM requires 128-bit block cipher");
         }
 
-		let mut zero = [0u8; GCM_BLOCK_SIZE];
+		let zero = [0u8; GCM_BLOCK_SIZE];
         let mut key = [0u8; GCM_BLOCK_SIZE];
         cipher.encrypt(&mut key, &zero);
 
@@ -779,7 +779,7 @@ impl Gcm {
             product_table: Default::default(),
         };
 
-        let mut x = GcmFieldElement {
+        let x = GcmFieldElement {
             low: u64::from_be_bytes(key[0..8].try_into().unwrap()),
 			high: u64::from_be_bytes(key[8..16].try_into().unwrap())
         };

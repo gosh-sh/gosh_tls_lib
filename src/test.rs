@@ -2,15 +2,10 @@ use crate::tls_connect::get_jwk_tls_data;
 
 use crate::format;
 
-use num_bigint::BigInt;
 //use crate::tls_session::Session;
 use crate::tls_connect::*;
 use crate::tls_session;
 
-use std::io::{self, Write, BufRead, Read};
-use std::net::TcpStream;
-use std::fs::File;
-use num_traits::Num;
 
 use hex::FromHex;
 

@@ -1,4 +1,4 @@
-use num_bigint::{BigInt, BigUint, ToBigInt, Sign};
+use num_bigint::{BigInt, BigUint};
 use num_traits::Zero;
 //use std::error::Error;
 //use std::fmt;
@@ -194,7 +194,7 @@ pub fn verify_pss(pub_key: &PublicKey, hash: usize, digest: &[u8], sig: &[u8], o
 	}
     let em_bits = pub_key.n.bits() - 1;
     let em_len = (em_bits + 7) / 8;
-    let mut em = encrypt(pub_key, sig);
+    let em = encrypt(pub_key, sig);
 
     // Like in signPSSWithSalt, deal with mismatches between emLen and the size
 	// of the modulus. The spec would have us wire emLen into the encoding

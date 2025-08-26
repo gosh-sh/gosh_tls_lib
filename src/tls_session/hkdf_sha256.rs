@@ -1,4 +1,3 @@
-use std::error::Error;
 
 const SIZE: usize = 32;
 const BLOCK_SIZE: usize = 64;
@@ -583,7 +582,7 @@ impl Hkdf {
 
 // fn expand(hash: fn() -> HmacSha256, pseudorandom_key: &[u8], info: &[u8]) -> Hkdf<io::Empty> {
 pub fn expand(pseudorandom_key: &[u8], info: &[u8]) -> Hkdf {
-    let mut expander = Hmac::new(pseudorandom_key);//let mut expander = hash();
+    let expander = Hmac::new(pseudorandom_key);//let mut expander = hash();
     //expander.update(pseudorandom_key);
     Hkdf::new(expander, info.to_vec())
 }
