@@ -3,7 +3,6 @@ use std::net::TcpStream;
 
 use chrono::DateTime;
 use chrono::FixedOffset;
-use chrono::TimeZone;
 
 pub struct Messages {
     pub client_hello: Record,

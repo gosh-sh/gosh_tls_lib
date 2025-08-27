@@ -553,7 +553,7 @@ impl Session {
 
         println!("send_data msg is : {:?}", msg);
         self.records_sent += 1;
-        self.conn.write(&msg[..]); // self.conn.write_all(data)?;
+        let _ = self.conn.write(&msg[..]); // self.conn.write_all(data)?;
         self.messages.application_request = Record { 0: msg };
     }
 
