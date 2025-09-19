@@ -1510,9 +1510,11 @@ fn check_signature(
     //}
     //}
     let hash_type_str = hash_type.unwrap();
+    let mut hash_len_in_bits: usize = 0;
     let hashed = match hash_type_str.as_str() {
         "SHA256" => hkdf_sha256::sum256(signed).to_vec(),
         "SHA384" => sha512::sum384(signed).to_vec(),
+        "SHA512" => sha512::sum512(signed).to_vec(),
         _ => panic!("unknown hash type"),
     };
 
@@ -1530,10 +1532,10 @@ fn check_signature(
             if algo.is_rsa_pss() {
                 let pss_options =
                     rsa::PSSOptions { salt_length: rsa::PSS_SALT_LENGTH_EQUALS_HASH, hash: 0 };
-                return rsa::verify_pss(rsa_pub_key, 256, &hashed, signature, &pss_options);
+                return rsa::verify_pss(rsa_pub_key, hash_len_in_bits, &hashed, signature, &pss_options);
             } else {
                 // return rsa::verify_pkcs1v15(rsa_pub_key, hash_type, signed, signature);
-                return rsa::verify_pkcs1v15(rsa_pub_key, 256, &hashed, signature);
+                return rsa::verify_pkcs1v15(rsa_pub_key, hash_len_in_bits, &hashed, signature);
             }
         }
         PublicKey::ECDSAPublicKey(ecdsa_pub_key) => {

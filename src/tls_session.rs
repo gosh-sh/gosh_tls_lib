@@ -369,6 +369,8 @@ impl Session {
             && sign_type != SHA256WITH_RSA
             && sign_type != ECDSA_WITH_SHA256
             && sign_type != SHA256WITH_RSAPSS
+            && sign_type != SHA512WITH_RSA
+            && sign_type != ECDSA_WITH_SHA512
         {
             panic!("not supported (not sha256) type of signature");
         }
@@ -410,7 +412,9 @@ impl Session {
             SHA384WITH_RSAPSS => sha512::sum384(&check_sum_extend).to_vec(),
             SHA384WITH_RSA => sha512::sum384(&check_sum_extend).to_vec(),
             SHA384WITH_RSAE => sha512::sum384(&check_sum_extend).to_vec(),
-            _ => panic!("not supported (not sha256 or 384) type of signature"),
+            SHA512WITH_RSA => sha512::sum512(&check_sum_extend).to_vec(),
+            ECDSA_WITH_SHA512 => sha512::sum512(&check_sum_extend).to_vec(),
+            _ => panic!("not supported (not sha256, sha384 or sha512) type of signature"),
         };
 
         println!("client_server_hello is : {:?}", &client_server_hello);

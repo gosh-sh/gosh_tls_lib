@@ -64,12 +64,12 @@ fn main_test() {
     append_uint32(&mut data, current_timestamp);
     println!("tls_session_bytes is : {:?}", tls_session_bytes);
 
-    let mut kid = hex::decode("98dc55c8b209363a2451774bce5c42718d13cb7d").unwrap(); // google kid
+    let mut kid = hex::decode("927b8fb67bbad77445e5fea4c71aa9846d7ddd01").unwrap(); // google kid
     //let mut kid = hex::decode("3f96980381e451efad0d2ddd30e3d3").unwrap(); // kakao kid
     //let mut kid = hex::decode("9f252dadd5f233f93d2fa528d12fea").unwrap();
     println!("kid is : {:?}", kid);
     let mut root_cert = match domain {
-        "www.googleapis.com" => tls_session::get_root_cert_google_g1().to_vec(),
+        "www.googleapis.com" => tls_session::get_root_cert_google_g4().to_vec(),
         "kauth.kakao.com" => tls_session::get_root_cert_kakao().to_vec(),
         _ => tls_session::get_root_cert_facebook().to_vec(),
     };
