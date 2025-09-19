@@ -1512,9 +1512,9 @@ fn check_signature(
     let hash_type_str = hash_type.unwrap();
     let mut hash_len_in_bits: usize = 0;
     let hashed = match hash_type_str.as_str() {
-        "SHA256" => hkdf_sha256::sum256(signed).to_vec(),
-        "SHA384" => sha512::sum384(signed).to_vec(),
-        "SHA512" => sha512::sum512(signed).to_vec(),
+        "SHA256" => {hash_len_in_bits = 256; hkdf_sha256::sum256(signed).to_vec()},
+        "SHA384" => {hash_len_in_bits = 384; sha512::sum384(signed).to_vec()},
+        "SHA512" => {hash_len_in_bits = 512; sha512::sum512(signed).to_vec()},
         _ => panic!("unknown hash type"),
     };
 

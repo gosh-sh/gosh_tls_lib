@@ -25,11 +25,11 @@ fn main_test() {
     //let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
 
     //https://kauth.kakao.com/.well-known/jwks.json
-    //let domain = "kauth.kakao.com";
+    let domain = "kauth.kakao.com";
     //let jwk_get_request =  "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ";
 
     //https://www.googleapis.com/oauth2/v3/certs
-    let domain = "www.googleapis.com";
+    //let domain = "www.googleapis.com";
     //let jwk_get_request = "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ";
 
     let jwk_get_request = match domain {
@@ -64,9 +64,9 @@ fn main_test() {
     append_uint32(&mut data, current_timestamp);
     println!("tls_session_bytes is : {:?}", tls_session_bytes);
 
-    let mut kid = hex::decode("927b8fb67bbad77445e5fea4c71aa9846d7ddd01").unwrap(); // google kid
+    //let mut kid = hex::decode("927b8fb67bbad77445e5fea4c71aa9846d7ddd01").unwrap(); // google kid
     //let mut kid = hex::decode("3f96980381e451efad0d2ddd30e3d3").unwrap(); // kakao kid
-    //let mut kid = hex::decode("9f252dadd5f233f93d2fa528d12fea").unwrap();
+    let mut kid = hex::decode("9f252dadd5f233f93d2fa528d12fea").unwrap();
     println!("kid is : {:?}", kid);
     let mut root_cert = match domain {
         "www.googleapis.com" => tls_session::get_root_cert_google_g4().to_vec(),
