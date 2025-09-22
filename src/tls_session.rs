@@ -67,8 +67,12 @@ pub fn get_root_cert_kakao() -> [u8; 914] {
     certs::ROOT_KAKAO_CERT
 }
 
-pub fn get_root_cert_facebook() -> [u8; /*969*/ 914] {
-    certs::ROOT_FACEBOOK_CERT
+pub fn get_root_cert_facebook_2() -> [u8; /*969*/ 914] {
+    certs::ROOT_FACEBOOK_CERT_2
+}
+
+pub fn get_root_cert_facebook_1() -> [u8; 969] {
+    certs::ROOT_FACEBOOK_CERT_1
 }
 
 

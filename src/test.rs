@@ -78,7 +78,7 @@ fn main_test() {
     let mut root_cert = match domain {
         "www.googleapis.com" => tls_session::get_root_cert_google_g4().to_vec(),
         "kauth.kakao.com" => tls_session::get_root_cert_kakao().to_vec(),
-        _ => tls_session::get_root_cert_facebook().to_vec(),
+        _ => tls_session::get_root_cert_facebook_2().to_vec(),
     };
 
     let mut len_of_root_cert = format::u16_to_bytes(root_cert.len() as u16).to_vec();
