@@ -67,9 +67,11 @@ pub fn get_root_cert_kakao() -> [u8; 914] {
     certs::ROOT_KAKAO_CERT
 }
 
-pub fn get_root_cert_facebook() -> [u8; 969] {
+pub fn get_root_cert_facebook() -> [u8; /*969*/ 914] {
     certs::ROOT_FACEBOOK_CERT
 }
+
+
 
 pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, String> {
     let mut map: HashMap<String, String> = HashMap::new();
