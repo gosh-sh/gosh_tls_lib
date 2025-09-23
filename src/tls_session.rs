@@ -2,28 +2,28 @@
 mod aes256gcm;
 mod certs;
 mod hkdf_sha256;
+mod sha512;
 mod x25519;
-use std::collections::HashMap;
-use num_bigint::BigInt;
-use x25519::curve25519_donna;
-use format::*;
-use network::send;
-use hkdf_sha256::*;
-use certs::check_certs;
 
-use std::io::{self, Write};
+use std::collections::HashMap;
+use std::io::Write;
+use std::io::{self};
 use std::net::TcpStream;
-use std::ops::Mul;
 
 //use base64::decode;
 use base64url::decode;
+use chrono::Utc;
+use format::*;
 use hex::FromHex;
+use hkdf_sha256::*;
+use rand::RngCore;
+use x25519::BASE_POINT;
+use x25519::curve25519_donna;
 
-use rand::{RngCore, thread_rng};
-use crate::{network, format};
-use crate::tls_session::certs::{check_certs_with_fixed_root, check_certs_with_known_roots}; // Для генерации случайных данных
-
-use std::fs::File;
+use crate::format;
+use crate::network;
+use crate::tls_session::certs::check_certs_with_fixed_root;
+use crate::tls_session::certs::check_certs_with_known_roots; // Для генерации случайных данных
 
 //const UnknownSignatureAlgorithm: u16 = 0;
 //const MD2WithRSA: u16 = 1;  // Unsupported.
@@ -45,78 +45,86 @@ const ECDSA_WITH_SHA512: u16 = 1539; // 06 03 (ECDSA-SECP521r1-SHA512)
 const SHA256WITH_RSAPSS: u16 = 2057; // 08 09 (RSA-PSS-PSS-SHA256)
 const SHA384WITH_RSAPSS: u16 = 2058; // 08 0a (RSA-PSS-PSS-SHA384)
 const SHA512WITH_RSAPSS: u16 = 2059; // 08 0b (RSA-PSS-PSS-SHA512)
-const PureEd25519: u16 = 2055; // 08 07 (ED25519)
+const PURE_ED25519: u16 = 2055; // 08 07 (ED25519)
 
-pub fn get_root_cert_google_g1() -> [u8;1373] {
+pub fn get_root_cert_google_g1() -> [u8; 1371] {
     certs::ROOT_GOOGLE_CERT_G1
 }
 
-pub fn get_root_cert_google_g2() -> [u8;1373] {
+pub fn get_root_cert_google_g2() -> [u8; 1371] {
     certs::ROOT_GOOGLE_CERT_G2
 }
 
-pub fn get_root_cert_google_g3() -> [u8;527] {
+pub fn get_root_cert_google_g3() -> [u8; 525] {
     certs::ROOT_GOOGLE_CERT_G3
 }
 
-pub fn get_root_cert_google_g4() -> [u8;527] {
+pub fn get_root_cert_google_g4() -> [u8; 525] {
     certs::ROOT_GOOGLE_CERT_G4
 }
 
-pub fn get_root_cert_kakao() -> [u8;916] {
+pub fn get_root_cert_kakao() -> [u8; 914] {
     certs::ROOT_KAKAO_CERT
 }
 
-pub fn get_root_cert_facebook() -> [u8;971] {
-    certs::ROOT_FACEBOOK_CERT
+pub fn get_root_cert_facebook_2() -> [u8; 914] {
+    certs::ROOT_FACEBOOK_CERT_2
+}
+
+pub fn get_root_cert_facebook_1() -> [u8; 969] {
+    certs::ROOT_FACEBOOK_CERT_1
 }
 
 pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, String> {
     let mut map: HashMap<String, String> = HashMap::new();
     match domain {
-       "www.googleapis.com" => {
-            for root_cert_hex in certs::GOOGLE_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]); 
+        "www.googleapis.com" => {
+            for root_cert_hex in certs::LV_GOOGLE_ROOTS_CERTS {
+                let root_cert =
+                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]);
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
             return Ok(map);
-       }
-       "kauth.kakao.com" => {
-            for root_cert_hex in certs::KAKAO_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]); 
+        }
+        "kauth.kakao.com" => {
+            for root_cert_hex in certs::LV_KAKAO_ROOTS_CERTS {
+                let root_cert =
+                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]);
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
             return Ok(map);
-       }
-       "www.facebook.com" => {
-            for root_cert_hex in certs::FACEBOOK_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]); 
+        }
+        "www.facebook.com" => {
+            for root_cert_hex in certs::LV_FACEBOOK_ROOTS_CERTS {
+                let root_cert =
+                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]);
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
             return Ok(map);
-       }
-       _ => {return Err("Invalid domain".to_string());}
+        }
+        _ => {
+            return Err("Invalid domain".to_string());
+        }
     }
 }
 
 pub struct Keys {
     pub public: [u8; 32],
-    pub private: [u8; 32],//Vec<u8>,
-    pub handshake_secret: [u8;32],
-    pub client_handshake_secret: [u8;32],
-    pub client_handshake_key: [u8;16],
-    pub server_handshake_key: [u8;16],
-    pub client_handshake_iv: [u8;12],
-    pub server_handshake_iv: [u8;12],
-    pub client_application_key: [u8;16],
-    pub client_application_iv: [u8;12],
-    pub server_application_key: [u8;16],
-    pub server_application_iv: [u8;12],
+    pub private: [u8; 32], //Vec<u8>,
+    pub handshake_secret: [u8; 32],
+    pub client_handshake_secret: [u8; 32],
+    pub client_handshake_key: [u8; 16],
+    pub server_handshake_key: [u8; 16],
+    pub client_handshake_iv: [u8; 12],
+    pub server_handshake_iv: [u8; 12],
+    pub client_application_key: [u8; 16],
+    pub client_application_iv: [u8; 12],
+    pub server_application_key: [u8; 16],
+    pub server_application_iv: [u8; 12],
 }
-
 
 pub fn random32bytes() -> [u8; 32] {
     let mut buf = [0u8; 32];
@@ -125,12 +133,11 @@ pub fn random32bytes() -> [u8; 32] {
 }
 
 pub fn key_pair() -> Keys {
-    //let private_key = random(32);
     //println!("private_key {:?}", private_key);
-    //let private_key = random32bytes();
-    let private_key = [231, 226, 189, 128, 175, 192, 46, 233, 160, 243, 227, 168, 186, 174, 207, 111, 124, 21, 6, 220, 18, 155, 18, 17, 39, 165, 203, 108, 109, 3, 40, 186];
-    let basepoint:[u8;32] = [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    let public_key = curve25519_donna(&private_key, &basepoint);
+    let private_key = random32bytes();
+    //let private_key = [231, 226, 189, 128, 175, 192, 46, 233, 160, 243, 227, 168, 186, 174, 207, 111, 124, 21, 6, 220, 18, 155, 18, 17, 39, 165, 203, 108, 109, 3, 40, 186];
+    //let basepoint:[u8;32] = [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let public_key = curve25519_donna(&private_key, &BASE_POINT);
     //println!("private_key {:?}", private_key);
     //println!("public_key {:?}", public_key);
 
@@ -138,23 +145,22 @@ pub fn key_pair() -> Keys {
         public: public_key, // public_key.compress().to_bytes().to_vec(),
         private: private_key,
         //server_public: Vec::new(),
-        handshake_secret: [0u8;32],
-        client_handshake_secret: [0u8;32],
-        client_handshake_key: [0u8;16],
-        server_handshake_key: [0u8;16],
-        client_handshake_iv: [0u8;12],
-        server_handshake_iv: [0u8;12],
-        client_application_key: [0u8;16],
-        client_application_iv: [0u8;12],
-        server_application_key: [0u8;16],
-        server_application_iv: [0u8;12],
+        handshake_secret: [0u8; 32],
+        client_handshake_secret: [0u8; 32],
+        client_handshake_key: [0u8; 16],
+        server_handshake_key: [0u8; 16],
+        client_handshake_iv: [0u8; 12],
+        server_handshake_iv: [0u8; 12],
+        client_application_key: [0u8; 16],
+        client_application_iv: [0u8; 12],
+        server_application_key: [0u8; 16],
+        server_application_iv: [0u8; 12],
     }
 }
 
 // AEAD helper functions
 
-fn decrypt(key: &[u8;16], iv: &[u8;12], wrapper: &[u8]) -> Vec<u8> {
-
+fn decrypt(key: &[u8; 16], iv: &[u8; 12], wrapper: &[u8]) -> Vec<u8> {
     let block = aes256gcm::new_cipher(key);
     let aes_gcm = aes256gcm::new_gcm(block);
 
@@ -165,7 +171,7 @@ fn decrypt(key: &[u8;16], iv: &[u8;12], wrapper: &[u8]) -> Vec<u8> {
     return plaintext;
 }
 
-fn encrypt(key: &[u8;16], iv: &[u8;12], plaintext: &[u8], additional: &[u8]) -> Vec<u8> {
+fn encrypt(key: &[u8; 16], iv: &[u8; 12], plaintext: &[u8], additional: &[u8]) -> Vec<u8> {
     let block = aes256gcm::new_cipher(key);
     let aes_gcm = aes256gcm::new_gcm(block);
 
@@ -176,12 +182,12 @@ fn encrypt(key: &[u8;16], iv: &[u8;12], plaintext: &[u8], additional: &[u8]) -> 
     [additional.to_vec(), ciphertext].concat() // Concatenate additional data with ciphertext
 }
 
-pub fn hkdf_expand_label(secret: &[u8;32], label: &str, context: &[u8], length: u16) -> Vec<u8> {
+pub fn hkdf_expand_label(secret: &[u8; 32], label: &str, context: &[u8], length: u16) -> Vec<u8> {
     // Construct HKDF label
     let mut hkdf_label = vec![];
     hkdf_label.extend_from_slice(&length.to_be_bytes());
     let tls13_prefix = b"tls13 ";
-    hkdf_label.push((tls13_prefix.len()+label.as_bytes().len()) as u8);
+    hkdf_label.push((tls13_prefix.len() + label.as_bytes().len()) as u8);
     hkdf_label.extend_from_slice(tls13_prefix);
     hkdf_label.extend_from_slice(label.as_bytes());
 
@@ -192,48 +198,52 @@ pub fn hkdf_expand_label(secret: &[u8;32], label: &str, context: &[u8], length: 
     //println!("secret is : {:?}", &secret);
 
     // Expand using HKDF
-    let mut reader = hkdf_sha256::expand(secret, &hkdf_label[..]);//let hkdf = Hkdf::<Sha256>::new(Some(secret), &hkdf_label);
+    let mut reader = hkdf_sha256::expand(secret, &hkdf_label[..]); //let hkdf = Hkdf::<Sha256>::new(Some(secret), &hkdf_label);
     let buf = reader.read(length as usize);
     //println!("hkdf expand result is is : {:?}", &buf);
 
     buf
 }
 
-pub fn derive_secret(secret: &[u8;32], label: &str, transcript_messages: &[u8]) -> [u8; 32] {
-
-    let hash = hkdf_sha256::sum256( transcript_messages);
+pub fn derive_secret(secret: &[u8; 32], label: &str, transcript_messages: &[u8]) -> [u8; 32] {
+    let hash = hkdf_sha256::sum256(transcript_messages);
     //println!("derive_secret hash is : {:?}", &hash);
     let secret = hkdf_expand_label(secret, label, &hash, 32);
     secret.try_into().unwrap()
-
 }
 
 pub struct Session {
-    domain_name:        String,
-    conn:               TcpStream,
-    server_hello:       format::ServerHello,
-    messages:           format::Messages,
-    keys:               Keys,
-    records_sent:       u8,
-    records_received:   u8,
-    pub root_cert_sn: String
+    domain_name: String,
+    conn: TcpStream,
+    server_hello: format::ServerHello,
+    messages: format::Messages,
+    keys: Keys,
+    records_sent: u8,
+    records_received: u8,
+    pub root_cert_sn: String,
 }
 
 impl Session {
-
     pub fn new(domain: String) -> io::Result<Self> {
         let stream = TcpStream::connect(format!("{}:443", domain))?;
         let keys = key_pair();
         Ok(Session {
             domain_name: domain,
             conn: stream,
-            server_hello: ServerHello{random: [0u8;32], public_key: [0u8;32]},
-            messages: Messages{client_hello: Record::new(), server_hello: Record::new(), server_handshake: DecryptedRecord::new(),
-                encrypted_server_handshake: Record::new(), application_request: Record::new(), encrypted_ticket: Record::new(), http_response: Record::new()},
-            keys: keys,
+            server_hello: ServerHello { random: [0u8; 32], public_key: [0u8; 32] },
+            messages: Messages {
+                client_hello: Record::new(),
+                server_hello: Record::new(),
+                server_handshake: DecryptedRecord::new(),
+                encrypted_server_handshake: Record::new(),
+                application_request: Record::new(),
+                encrypted_ticket: Record::new(),
+                http_response: Record::new(),
+            },
+            keys,
             records_sent: 0,
-            records_received:0,
-            root_cert_sn: String::new()
+            records_received: 0,
+            root_cert_sn: String::new(),
         })
     }
 
@@ -257,12 +267,12 @@ impl Session {
         let mut conn = &self.conn;
         //self.Keys = key_pair();
         let client_hello = Self::client_hello(&self.domain_name, &self.keys);
-        self.messages.client_hello = Record{0:client_hello.to_vec()};
+        self.messages.client_hello = Record { 0: client_hello.to_vec() };
         network::send(&mut conn, &client_hello);
     }
 
     pub fn get_server_hello(&mut self) {
-        let mut record = format::read_record(&mut self.conn);
+        let record = format::read_record(&mut self.conn);
         if record.rtype() != 0x16 {
             //panic("expected server hello")
             println!("expected server hello ")
@@ -271,11 +281,9 @@ impl Session {
         self.messages.server_hello = record.clone();
         let hello = format::parse_server_hello(&mut record.contents());
         self.server_hello = hello;
-
     }
 
-    fn parse_server_handshake(&mut self) -> bool{
-
+    fn parse_server_handshake(&mut self) -> bool {
         // ignore change cipher spec 14 03 03
         let mut record = format::read_record(&mut self.conn); // let record = tls_format::ReadRecord(&self.conn);
         if record.rtype() == 0x14 {
@@ -285,15 +293,16 @@ impl Session {
 
         if record.rtype() != 0x17 {
             //panic!("expected wrapper (ParseServerHandshake)");
-            println!("expected wrapper (ParseServerHandshake)");
             return false;
         }
-        let mut server_handshake_message = decrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &record.0[..]);
+        let mut server_handshake_message =
+            decrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &record.0[..]);
         //println!("server_handshake_message is : {:?}", &server_handshake_message);
-        if server_handshake_message.len()>2000 {
+        if server_handshake_message.len() > 2000 {
             self.messages.encrypted_server_handshake = record.clone();
         } else {
-            server_handshake_message = format::trunc_end_22(&server_handshake_message);//server_handshake_message.pop();
+            server_handshake_message =
+                format::trunc_end_with_trailer(&server_handshake_message, 22u8); //server_handshake_message.pop();
             println!("server_handshake_message is : {:?}", &server_handshake_message);
             //server_handshake_message = [8u8, 0u8, 0u8, 2u8, 0u8, 0u8].to_vec();
             let mut records_received_counter = 1u8;
@@ -302,33 +311,43 @@ impl Session {
                 let record = format::read_record(&mut self.conn);
                 let mut iv = self.keys.server_handshake_iv.clone();
                 iv[11] ^= records_received_counter;
-                let mut server_handshake_message_next_part = decrypt(&self.keys.server_handshake_key, &iv, &record.0[..]);
-                server_handshake_message_next_part = format::trunc_end_22(&server_handshake_message_next_part);//server_handshake_message_next_part.pop();
-                println!("server_handshake_message_next_part is : {:?}", &server_handshake_message_next_part);
+                let mut server_handshake_message_next_part =
+                    decrypt(&self.keys.server_handshake_key, &iv, &record.0[..]);
+                server_handshake_message_next_part =
+                    format::trunc_end_with_trailer(&server_handshake_message_next_part, 22u8); // trunc end zeros with 22
+                //println!("server_handshake_message_next_part is : {:?}", &server_handshake_message_next_part);
                 //let message_type = server_handshake_message_next_part[0];
-                let handshake_finish = format::contains_handshake_finish(&server_handshake_message_next_part);
+                let handshake_finish =
+                    format::contains_handshake_finish(&server_handshake_message_next_part);
                 server_handshake_message.append(&mut server_handshake_message_next_part);
                 records_received_counter += 1;
 
                 //println!("message_type is : {:?}", &message_type);
-                if handshake_finish { // if message_type==0x14 {
+                if handshake_finish {
+                    // if message_type==0x14 {
                     break;
                 }
             }
             server_handshake_message.push(22u8);
 
             let server_handshake_message_len = server_handshake_message.len() + 16;
-            let server_handhake_len_bytes = format::u16_to_bytes(server_handshake_message_len as u16);
+            let server_handhake_len_bytes =
+                format::u16_to_bytes(server_handshake_message_len as u16);
             let mut header = [23u8, 3u8, 3u8, 0u8, 0u8];
             header[3] = server_handhake_len_bytes[0];
             header[4] = server_handhake_len_bytes[1];
-            let encrypted_overall_record = encrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &server_handshake_message, &header);
-            self.messages.encrypted_server_handshake = Record{0: encrypted_overall_record};
+            let encrypted_overall_record = encrypt(
+                &self.keys.server_handshake_key,
+                &self.keys.server_handshake_iv,
+                &server_handshake_message,
+                &header,
+            );
+            self.messages.encrypted_server_handshake = Record { 0: encrypted_overall_record };
         }
-        self.messages.server_handshake = DecryptedRecord{ 0: server_handshake_message};
+        self.messages.server_handshake = DecryptedRecord { 0: server_handshake_message };
 
         self.make_application_keys();
-        if !(self.check_handshake()){
+        if !(self.check_handshake()) {
             return false;
         }
         return true;
@@ -336,72 +355,125 @@ impl Session {
 
     pub fn check_handshake(&mut self) -> bool {
         let handshake_data = self.messages.server_handshake.contents();
+        //println!("check_handshake handshake_data is : {:?}", &handshake_data);
         let len_of_padding = handshake_data[3] as usize;
-        let certs_chain = &handshake_data[4+len_of_padding+1..];//let certs_chain = &handshake_data[7..];
+        let certs_chain = &handshake_data[4 + len_of_padding + 1..]; //let certs_chain = &handshake_data[7..];
+
+        //println!("check_handshake certs_chain is : {:?}", &certs_chain);
 
         //next three bytes is the length of certs chain
-        let certs_chain_len = (certs_chain[0] as usize)*65536 + (certs_chain[1] as usize)*256 + (certs_chain[2] as usize);
+        let certs_chain_len = (certs_chain[0] as usize) * 65536
+            + (certs_chain[1] as usize) * 256
+            + (certs_chain[2] as usize);
         println!("certs_chain_len is : {:?}", &certs_chain_len); // must be 4205 = 4096 + 109
         if certs_chain[certs_chain_len + 3] != 0xf {
             panic!("signature not found");
         }
 
-        let sign_type = (certs_chain[certs_chain_len + 7] as u16)*256 + (certs_chain[certs_chain_len + 8] as u16);
-        if sign_type!=SHA256WITH_RSAE && sign_type!=SHA256WITH_RSA && sign_type!=ECDSA_WITH_SHA256 && sign_type!=SHA256WITH_RSAPSS {
+        let sign_type = (certs_chain[certs_chain_len + 7] as u16) * 256
+            + (certs_chain[certs_chain_len + 8] as u16);
+        if sign_type != SHA256WITH_RSAE
+            && sign_type != SHA256WITH_RSA
+            && sign_type != ECDSA_WITH_SHA256
+            && sign_type != SHA256WITH_RSAPSS
+            && sign_type != SHA512WITH_RSA
+            && sign_type != ECDSA_WITH_SHA512
+        {
             panic!("not supported (not sha256) type of signature");
         }
 
-        let signature_len = (certs_chain[certs_chain_len + 9] as usize)*256 + (certs_chain[certs_chain_len + 10] as usize);
+        let signature_len = (certs_chain[certs_chain_len + 9] as usize) * 256
+            + (certs_chain[certs_chain_len + 10] as usize);
         println!("signature_len is : {:?}", &signature_len);
         let signature = &certs_chain[certs_chain_len + 11..certs_chain_len + 11 + signature_len];
 
-        let current_timestamp = 1000i64;// SystemTime::now()
+        //let signature_with_type = concatenate(&[ &certs_chain[certs_chain_len + 7..certs_chain_len + 8], &signature]);
 
-        let client_server_hello = format::concatenate(&[self.messages.client_hello.contents(), self.messages.server_hello.contents()]);
-        let check_sum = hkdf_sha256::sum256(&client_server_hello);
-        let check_result = check_certs_with_known_roots(current_timestamp,
-                        &check_sum,
-                        &certs_chain[4..certs_chain_len+1],
-                        &signature);
+        let now = Utc::now();
+        let current_timestamp = now.timestamp(); //1000i64;// SystemTime::now()
+
+        let client_server_hello = format::concatenate(&[
+            self.messages.client_hello.contents(),
+            self.messages.server_hello.contents(),
+            &handshake_data[..4 + len_of_padding + 1 + certs_chain_len + 3],
+        ]);
+
+        let check_sum = hkdf_sha256::sum256(&client_server_hello).to_vec();
+
+        let context: [u8; 98] = [
+            32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+            32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+            32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 84, 76,
+            83, 32, 49, 46, 51, 44, 32, 115, 101, 114, 118, 101, 114, 32, 67, 101, 114, 116, 105,
+            102, 105, 99, 97, 116, 101, 86, 101, 114, 105, 102, 121, 0,
+        ];
+
+        let check_sum_extend = format::concatenate(&[&context, &check_sum]);
+
+        let check_prepared = match sign_type {
+            SHA256WITH_RSAE => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
+            SHA256WITH_RSA => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
+            ECDSA_WITH_SHA256 => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
+            SHA256WITH_RSAPSS => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
+            ECDSA_WITH_SHA384 => sha512::sum384(&check_sum_extend).to_vec(),
+            SHA384WITH_RSAPSS => sha512::sum384(&check_sum_extend).to_vec(),
+            SHA384WITH_RSA => sha512::sum384(&check_sum_extend).to_vec(),
+            SHA384WITH_RSAE => sha512::sum384(&check_sum_extend).to_vec(),
+            SHA512WITH_RSA => sha512::sum512(&check_sum_extend).to_vec(),
+            ECDSA_WITH_SHA512 => sha512::sum512(&check_sum_extend).to_vec(),
+            _ => panic!("not supported (not sha256, sha384 or sha512) type of signature"),
+        };
+
+        println!("client_server_hello is : {:?}", &client_server_hello);
+        let check_result = check_certs_with_known_roots(
+            current_timestamp,
+            &check_prepared,
+            &certs_chain[4..certs_chain_len + 1],
+            &signature,
+        );
         if check_result.is_none() {
             //panic(err.Error())
             println!("error in certificates chain !");
             return false;
         }
+
         let root_cert_sn = format!("0x{:064x}", check_result.clone().unwrap());
         println!("root_cert_sn: {:?}", root_cert_sn);
         //let mut file = File::create("found_root_id.txt").expect("Error creating file");
         //file.write(check_result.unwrap().to_string().as_bytes());
         self.root_cert_sn = root_cert_sn;
         return true;
-        
     }
 
     pub fn make_application_keys(&mut self) {
-        let handshake_messages = format::concatenate( &[
+        let handshake_messages = format::concatenate(&[
             &self.messages.client_hello.contents(),
             &self.messages.server_hello.contents(),
-            &self.messages.server_handshake.contents()]
-        );
+            &self.messages.server_handshake.contents(),
+        ]);
 
         let zeros = [0u8; 32];
         let derived_secret = derive_secret(&self.keys.handshake_secret, "derived", &[]);
-        let master_secret = hkdf_sha256::extract(&zeros, &derived_secret);//let master_secret = Hkdf::<Sha256>::extract(Some(&zeros), &derived_secret);
+        let master_secret = hkdf_sha256::extract(&zeros, &derived_secret); //let master_secret = Hkdf::<Sha256>::extract(Some(&zeros), &derived_secret);
 
         let c_ap_secret = derive_secret(&master_secret, "c ap traffic", &handshake_messages);
-        self.keys.client_application_key = hkdf_expand_label(&c_ap_secret, "key", &[], 16).try_into().unwrap();
-        self.keys.client_application_iv = hkdf_expand_label(&c_ap_secret, "iv", &[], 12).try_into().unwrap();
+        self.keys.client_application_key =
+            hkdf_expand_label(&c_ap_secret, "key", &[], 16).try_into().unwrap();
+        self.keys.client_application_iv =
+            hkdf_expand_label(&c_ap_secret, "iv", &[], 12).try_into().unwrap();
 
         let s_ap_secret = derive_secret(&master_secret, "s ap traffic", &handshake_messages);
-        self.keys.server_application_key = hkdf_expand_label(&s_ap_secret, "key", &[], 16).try_into().unwrap();
-        self.keys.server_application_iv = hkdf_expand_label(&s_ap_secret, "iv", &[], 12).try_into().unwrap();
+        self.keys.server_application_key =
+            hkdf_expand_label(&s_ap_secret, "key", &[], 16).try_into().unwrap();
+        self.keys.server_application_iv =
+            hkdf_expand_label(&s_ap_secret, "iv", &[], 12).try_into().unwrap();
     }
 
-    fn client_change_cipher_spec(&mut self){
+    fn client_change_cipher_spec(&mut self) {
         network::send(&mut self.conn, &[0x14, 0x03, 0x03, 0x00, 0x01, 0x01]);
     }
 
-    fn client_handshake_finished(&mut self){
+    fn client_handshake_finished(&mut self) {
         let client_handshake_finished_msg = self.client_handshake_finished_msg();
         network::send(&mut self.conn, &client_handshake_finished_msg[..]);
     }
@@ -410,9 +482,9 @@ impl Session {
         let verify_data = self.verify_data();
 
         let mut msg = Vec::new();
-        msg.extend_from_slice(&[0x14, 0x00, 0x00, 0x20]); 
-        msg.extend_from_slice(&verify_data); 
-        msg.push(0x16); 
+        msg.extend_from_slice(&[0x14, 0x00, 0x00, 0x20]);
+        msg.extend_from_slice(&verify_data);
+        msg.push(0x16);
 
         let additional = [0x17, 0x03, 0x03, 0x00, 0x35];
 
@@ -428,74 +500,88 @@ impl Session {
 
     pub fn make_handshake_keys(&mut self) {
         let zeros = [0u8; 32];
-        let psk = [0u8; 32]; 
+        let psk = [0u8; 32];
 
         //self.server_hello.public_key=[246, 48, 130, 234, 125, 96, 179, 219, 52, 226, 168, 235, 57, 47, 53, 103, 96, 246, 129, 101, 202, 83, 142, 117, 64, 20, 47, 242, 241, 212, 56, 30];
         //println!("&self.server_hello.public_key is : {:?}", &self.server_hello.public_key);
         let shared_secret = curve25519_donna(&self.keys.private, &self.server_hello.public_key); //let shared_secret = X25519::from_slice(&self.keys.private).mul(&self.server_hello.public_key);
         //println!("shared_secret is : {:?}", shared_secret);
 
-        let early_secret = hkdf_sha256::extract(&zeros,&psk); //let (early_secret, hkdf) = Hkdf::<Sha256>::extract(Some(&zeros), &psk);
+        let early_secret = hkdf_sha256::extract(&zeros, &psk); //let (early_secret, hkdf) = Hkdf::<Sha256>::extract(Some(&zeros), &psk);
         let derived_secret = derive_secret(&early_secret, "derived", &[]);
         //println!("derived_secret is : {:?}", derived_secret);
-        self.keys.handshake_secret = hkdf_sha256::extract(&shared_secret, &derived_secret);//self.keys.handshake_secret = Hkdf::<Sha256>::extract(Some(&shared_secret), &derived_secret);
+        self.keys.handshake_secret = hkdf_sha256::extract(&shared_secret, &derived_secret); //self.keys.handshake_secret = Hkdf::<Sha256>::extract(Some(&shared_secret), &derived_secret);
         //println!("self.keys.handshake_secret is : {:?}", self.keys.handshake_secret);
 
-        let handshake_messages = format::concatenate(
-            &[&self.messages.client_hello.contents(),
-            &self.messages.server_hello.contents()]
-        );
+        let handshake_messages = format::concatenate(&[
+            &self.messages.client_hello.contents(),
+            &self.messages.server_hello.contents(),
+        ]);
         //println!("handshake_messages is : {:?}", handshake_messages);
         //let handshake_messages = vec![1, 0, 0, 157, 3, 3, 27, 126, 189, 42, 117, 227, 85, 44, 186, 155, 29, 86, 176, 221, 181, 209, 227, 24, 67, 227, 112, 232, 244, 106, 59, 250, 1, 175, 102, 253, 52, 236, 0, 0, 2, 19, 1, 1, 0, 0, 114, 0, 0, 0, 23, 0, 21, 0, 0, 18, 119, 119, 119, 46, 103, 111, 111, 103, 108, 101, 97, 112, 105, 115, 46, 99, 111, 109,
-                                      //0, 10, 0, 4, 0, 2, 0, 29, 0, 13, 0, 20, 0, 18, 4, 3, 8, 4, 4, 1, 5, 3, 8, 5, 5, 1, 8, 6, 6, 1, 2, 1, 0, 51, 0, 38, 0, 36, 0, 29, 0, 32, 192, 66, 56, 95, 6, 86, 129, 217, 28, 232, 5, 177, 109, 189, 139, 154, 6, 3, 215, 62, 202, 195, 214, 238, 231, 82, 157, 198, 107, 200, 81, 16, 0, 45, 0, 2, 1, 1, 0, 43, 0, 3, 2, 3, 4, 2, 0, 0, 86, 3, 3, 8, 215, 19, 207, 58, 155, 125, 3, 157, 121, 43, 159, 152, 229, 77, 159, 41, 50, 150, 5, 171, 174, 144, 47, 121, 11, 241, 132, 255, 77, 16, 244, 0, 19, 1, 0, 0, 46, 0, 51, 0, 36, 0, 29, 0, 32, 246, 48, 130, 234, 125, 96, 179, 219, 52, 226, 168, 235, 57, 47, 53, 103, 96, 246, 129, 101, 202, 83, 142, 117, 64, 20, 47, 242, 241, 212, 56, 30, 0, 43, 0, 2, 3, 4];
+        //0, 10, 0, 4, 0, 2, 0, 29, 0, 13, 0, 20, 0, 18, 4, 3, 8, 4, 4, 1, 5, 3, 8, 5, 5, 1, 8, 6, 6, 1, 2, 1, 0, 51, 0, 38, 0, 36, 0, 29, 0, 32, 192, 66, 56, 95, 6, 86, 129, 217, 28, 232, 5, 177, 109, 189, 139, 154, 6, 3, 215, 62, 202, 195, 214, 238, 231, 82, 157, 198, 107, 200, 81, 16, 0, 45, 0, 2, 1, 1, 0, 43, 0, 3, 2, 3, 4, 2, 0, 0, 86, 3, 3, 8, 215, 19, 207, 58, 155, 125, 3, 157, 121, 43, 159, 152, 229, 77, 159, 41, 50, 150, 5, 171, 174, 144, 47, 121, 11, 241, 132, 255, 77, 16, 244, 0, 19, 1, 0, 0, 46, 0, 51, 0, 36, 0, 29, 0, 32, 246, 48, 130, 234, 125, 96, 179, 219, 52, 226, 168, 235, 57, 47, 53, 103, 96, 246, 129, 101, 202, 83, 142, 117, 64, 20, 47, 242, 241, 212, 56, 30, 0, 43, 0, 2, 3, 4];
 
-        let c_hs_secret = derive_secret(&self.keys.handshake_secret, "c hs traffic", &handshake_messages);
+        let c_hs_secret =
+            derive_secret(&self.keys.handshake_secret, "c hs traffic", &handshake_messages);
         self.keys.client_handshake_secret = c_hs_secret.clone();
-        self.keys.client_handshake_key = hkdf_expand_label(&c_hs_secret, "key", &[], 16).try_into().unwrap();
+        self.keys.client_handshake_key =
+            hkdf_expand_label(&c_hs_secret, "key", &[], 16).try_into().unwrap();
         //println!("self.keys.client_handshake_key is : {:?}", self.keys.client_handshake_key);
-        self.keys.client_handshake_iv = hkdf_expand_label(&c_hs_secret, "iv", &[], 12).try_into().unwrap();
+        self.keys.client_handshake_iv =
+            hkdf_expand_label(&c_hs_secret, "iv", &[], 12).try_into().unwrap();
         //println!("self.keys.client_handshake_iv is : {:?}", self.keys.client_handshake_iv);
 
-        let s_hs_secret = derive_secret(&self.keys.handshake_secret, "s hs traffic", &handshake_messages);
+        let s_hs_secret =
+            derive_secret(&self.keys.handshake_secret, "s hs traffic", &handshake_messages);
         //let session_keys_server_handshake_key = hkdf_expand_label(&s_hs_secret, "key", &[], 16);
         //println!("session_keys_server_handshake_key_ is : {:?}", &session_keys_server_handshake_key);
-        self.keys.server_handshake_key = hkdf_expand_label(&s_hs_secret, "key", &[], 16).try_into().unwrap();
-        self.keys.server_handshake_iv = hkdf_expand_label(&s_hs_secret, "iv", &[], 12).try_into().unwrap();
+        self.keys.server_handshake_key =
+            hkdf_expand_label(&s_hs_secret, "key", &[], 16).try_into().unwrap();
+        self.keys.server_handshake_iv =
+            hkdf_expand_label(&s_hs_secret, "iv", &[], 12).try_into().unwrap();
     }
 
     pub fn verify_data(&self) -> Vec<u8> {
-        let finishedKey = hkdf_expand_label(&self.keys.client_handshake_secret, "finished", &[], 32);
+        let finished_key =
+            hkdf_expand_label(&self.keys.client_handshake_secret, "finished", &[], 32);
         let handshake_log = format::concatenate(&[
-            self.messages.client_hello.contents(), self.messages.server_hello.contents(), self.messages.server_handshake.contents()] );
-        let finishedHash = hkdf_sha256::sum256(&handshake_log[..]);
-        let mut hm = Hmac::new(&finishedKey);
-        hm.write(&finishedHash);
+            self.messages.client_hello.contents(),
+            self.messages.server_hello.contents(),
+            self.messages.server_handshake.contents(),
+        ]);
+        let finished_hash = hkdf_sha256::sum256(&handshake_log[..]);
+        let mut hm = Hmac::new(&finished_key);
+        hm.write(&finished_hash);
         hm.sum(&[])
     }
 
     //pub fn send_data(&mut self, data: &[u8]) -> io::Result<()> {
-        //self.conn.write_all(data)?;
-        //Ok(())
+    //self.conn.write_all(data)?;
+    //Ok(())
     //}
     pub fn send_data(&mut self, data: &[u8]) {
         let msg = self.encrypt_application_data(&data);
 
         println!("send_data msg is : {:?}", msg);
-        self.records_sent +=1;
-        self.conn.write(&msg[..]);// self.conn.write_all(data)?;
-        self.messages.application_request = Record{0:msg};
+        self.records_sent += 1;
+        let _ = self.conn.write(&msg[..]); // self.conn.write_all(data)?;
+        self.messages.application_request = Record { 0: msg };
     }
 
-    pub fn receive_data(&mut self) -> Vec<u8> { // receive ticket
+    pub fn receive_data(&mut self) -> Vec<u8> {
+        // receive ticket
         let record = format::read_record(&mut self.conn);
         println!("gotten record is : {:?}", &record.0);
         let mut iv = self.keys.server_application_iv.clone();
         iv[11] ^= self.records_received;
         println!("receive_data iv is : {:?}", &iv);
-        println!("receive_data self.keys.server_application_key is : {:?}", &self.keys.server_application_key);
+        println!(
+            "receive_data self.keys.server_application_key is : {:?}",
+            &self.keys.server_application_key
+        );
         let plaintext = decrypt(&self.keys.server_application_key, &iv, &record.0[..]);
         println!("decrypted record is : {:?}", &plaintext);
-        self.records_received +=1;
+        self.records_received += 1;
         self.messages.encrypted_ticket = record;
         plaintext
     }
@@ -507,13 +593,14 @@ impl Session {
         loop {
             println!("receive a portion!");
             let mut pt = self.receive_http_data();
-            pt = format::trunc_end_23(&pt);
+            pt = format::trunc_end_with_trailer(&pt, 23u8); // trunc zeroes with 23
             println!("pt is : {:?}", pt);
             response.extend_from_slice(&pt[..pt.len()]); // response.extend_from_slice(&pt[..pt.len()-1]);
             //response.push(23);
 
-            // Проверяем, совпадает ли конец ответа с искомой последовательностью
-            if pt.len() >= 5 && &pt[pt.len() - 4..] == &[0x0D, 0x0A, 0x0D, 0x0A] { // if pt.len() >= 5 && &pt[pt.len() - 5..] == &[0x0D, 0x0A, 0x0D, 0x0A, 0x17] {
+            // Check whether the end of the response matches the desired sequence
+            if pt.len() >= 5 && &pt[pt.len() - 4..] == &[0x0D, 0x0A, 0x0D, 0x0A] {
+                // if pt.len() >= 5 && &pt[pt.len() - 5..] == &[0x0D, 0x0A, 0x0D, 0x0A, 0x17] {
                 break;
             }
         }
@@ -522,20 +609,21 @@ impl Session {
     }
 
     fn receive_http_data(&mut self) -> Vec<u8> {
-        let record = format::read_record(&mut self.conn); 
-        let mut iv = vec![0u8; 12]; 
+        let record = format::read_record(&mut self.conn);
+        let mut iv = vec![0u8; 12];
 
         println!("receive_http_data record is : {:?}", &record.0[..]);
         iv.copy_from_slice(&self.keys.server_application_iv);
 
         iv[11] ^= self.records_received as u8;
 
-        let plaintext = decrypt(&self.keys.server_application_key, &iv.try_into().unwrap(), &record.0[..]);
+        let plaintext =
+            decrypt(&self.keys.server_application_key, &iv.try_into().unwrap(), &record.0[..]);
         println!("receive_http_data plaintext is : {:?}", &plaintext);
 
         self.records_received += 1;
 
-        self.messages.http_response.0.extend(record.0);// add to sequence of ciphertexts
+        self.messages.http_response.0.extend(record.0); // add to sequence of ciphertexts
 
         plaintext
     }
@@ -545,53 +633,60 @@ impl Session {
         println!("encrypt_application_data data.len() is : {:?}", &data.len());
         data_vec.push(0x17);
         let additional_length = (data_vec.len() + 16) as u16;
-        let additional = format::concatenate(&[
-            &[0x17, 0x03, 0x03], &format::u16_to_bytes(additional_length)
-        ]);
+        let additional =
+            format::concatenate(&[&[0x17, 0x03, 0x03], &format::u16_to_bytes(additional_length)]);
         println!("encrypt_application_data additional is : {:?}", &additional);
-        encrypt(&self.keys.client_application_key, &self.keys.client_application_iv, &data_vec[..], &additional[..])
+        encrypt(
+            &self.keys.client_application_key,
+            &self.keys.client_application_iv,
+            &data_vec[..],
+            &additional[..],
+        )
     }
 
     pub fn client_hello(name: &str, keys: &Keys) -> Vec<u8> {
         let extensions = format::concatenate(&[
             &format::extension(0x0, format::server_name(name)), // SNI extension
             &format::extension(0x0a, vec![0x00, 0x02, 0x00, 0x1d]), // groups
-            &format::extension(0x0d, vec![
-                0x00, 0x12, 0x04, 0x03,
-                0x08, 0x04, 0x04, 0x01,
-                0x05, 0x03, 0x08, 0x05,
-                0x05, 0x01, 0x08, 0x06,
-                0x06, 0x01, 0x02, 0x01
-            ]), // Signature algorithms
+            &format::extension(
+                0x0d,
+                vec![
+                    0x00, 0x12, 0x04, 0x03, 0x08, 0x04, 0x04, 0x01, 0x05, 0x03, 0x08, 0x05, 0x05,
+                    0x01, 0x08, 0x06, 0x06, 0x01, 0x02, 0x01,
+                ],
+            ), // Signature algorithms
             &format::extension(0x33, format::key_share(&keys.public)), // Key share
-            &format::extension(0x2d, vec![0x01, 0x01]), // PSK (no effect)
-            &format::extension(0x2b, vec![0x02, 0x03, 0x04]) // TLS version
-        ]
+            &format::extension(0x2d, vec![0x01, 0x01]),         // PSK (no effect)
+            &format::extension(0x2b, vec![0x02, 0x03, 0x04]),   // TLS version
+        ]);
+
+        let handshake = format::concatenate(
+            &[
+                &[0x03, 0x03],                                  // Client version: TLS 1.2
+                &random32bytes(),                               // Client random
+                &[0x00],                                        // No session id
+                &[0x00, 0x02, 0x13, 0x01], // Cipher suites: TLS_AES_128_GCM_SHA256
+                &[0x01, 0x00],             // Cipher suite length
+                &format::u16_to_bytes(extensions.len() as u16), // Extensions length
+                &extensions,
+            ], // Extensions
         );
 
-        let handshake = format::concatenate( &[
-            &[0x03, 0x03], // Client version: TLS 1.2
-            &random32bytes(),   // Client random
-            &[0x00],       // No session id
-            &[0x00, 0x02, 0x13, 0x01], // Cipher suites: TLS_AES_128_GCM_SHA256
-            &[0x01, 0x00], // Cipher suite length
-            &format::u16_to_bytes(extensions.len() as u16), // Extensions length
-            &extensions] // Extensions
-        );
-
-        format::concatenate( &[
-            &[0x16, 0x03, 0x01], // Handshake
-            &format::u16_to_bytes((handshake.len() + 4) as u16), // Length of handshake
-            &[0x01, 0x00], // Handshake type
-            &format::u16_to_bytes(handshake.len() as u16), // Handshake length
-            &handshake] // Handshake
+        format::concatenate(
+            &[
+                &[0x16, 0x03, 0x01],                                 // Handshake
+                &format::u16_to_bytes((handshake.len() + 4) as u16), // Length of handshake
+                &[0x01, 0x00],                                       // Handshake type
+                &format::u16_to_bytes(handshake.len() as u16),       // Handshake length
+                &handshake,
+            ], // Handshake
         )
     }
 
     pub fn serialize(&mut self) -> Vec<u8> {
         let mut res = self.keys.private.to_vec();
-        res.push(self.records_sent);// messages sent
-        res.push(self.records_received);// messages received
+        res.push(self.records_sent); // messages sent
+        res.push(self.records_received); // messages received
         res.extend(&self.messages.client_hello.0); // send client hello
         res.extend(&self.messages.server_hello.0); // get server hello
         // may be add change cipher spec 14 03 03 ...
@@ -609,282 +704,296 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     let len_of_kid = raw[4] as usize;
     let kid = &raw[5..5 + len_of_kid]; // let kid = &raw[4..24];
     let start_cert = 5 + len_of_kid;
-    let certificate_len = (256*raw[start_cert] as u16 + raw[start_cert+1] as u16) as usize; // let certificate_len = (256*raw[24] as u16 + raw[25] as u16) as usize;
-    println!("certificate_len is : {:?}", &certificate_len);
+    let certificate_len = (256 * raw[start_cert] as u16 + raw[start_cert + 1] as u16) as usize; // let certificate_len = (256*raw[24] as u16 + raw[25] as u16) as usize;
 
-    let external_root_cert = &raw[start_cert+2..start_cert+2+certificate_len]; // let external_root_cert = &raw[26..26+certificate_len];
-    let data = &raw[start_cert+2+certificate_len..]; // let data = &raw[26+certificate_len..];
+    let external_root_cert = &raw[start_cert + 2..start_cert + 2 + certificate_len]; // let external_root_cert = &raw[26..26+certificate_len];
+    let data = &raw[start_cert + 2 + certificate_len..]; // let data = &raw[26+certificate_len..];
 
-    // the first output byte indicates the success of the process: if it equals to 1 then success
-    // then follows the public keys from json
+    // the first output byte indicates the success of the process: if it equals to 1
+    // then success then follows the public keys from json
     // if the first bytes equals to 0 then unsuccess and the error code follows
     let timestamp_shortened = aes256gcm::uint32(&timestamp_bytes);
     let timestamp = timestamp_shortened as i64;
-    let private_key:[u8;32] = data[0..32].try_into().unwrap();
-    println!("private_key is : {:?}", &private_key);
-    let records_send: u8 = data[32];
+    let private_key: [u8; 32] = data[0..32].try_into().unwrap();
+
+    //let records_send: u8 = data[32];
     let records_received_declared: u8 = data[33];
     // check len of data
-    println!("data.len() is : {:?}", &data.len());
-    if data.len()<5000{ // 6500
+
+    if data.len() < 5000 {
         return vec![0u8, 3u8, 33u8]; // "insufficient len" : 0x3, 0x21 = 801
     }
     let client_hello_len = data[38] as usize;
-    println!("client_hello_len is : {:?}", &client_hello_len);
-    let client_hello: &[u8] = &data[34..39+client_hello_len]; //let client_hello:[u8;166] = data[34..200].try_into().unwrap(); // len is 166 bytes
-    println!("client_hello is : {:?}", &client_hello);
+
+    let client_hello: &[u8] = &data[34..39 + client_hello_len]; //let client_hello:[u8;166] = data[34..200].try_into().unwrap(); // len is 166 bytes
+
     if client_hello[0] != 0x16 {
         return vec![0u8, 3u8, 34u8]; // "client hello not found"
     }
-    let server_hello_start = 39+client_hello_len;
-    let server_hello:[u8;95] = data[server_hello_start..server_hello_start+95].try_into().unwrap();//let server_hello:[u8;95] = data[200..295].try_into().unwrap(); // len is 95 bytes
-    println!("server_hello is : {:?}", &server_hello);
+    let server_hello_start = 39 + client_hello_len;
+    let server_hello: [u8; 95] =
+        data[server_hello_start..server_hello_start + 95].try_into().unwrap(); //let server_hello:[u8;95] = data[200..295].try_into().unwrap(); // len is 95 bytes
     if server_hello[0] != 0x16 {
-        println!(" server hello not found");
         return vec![0u8, 3u8, 35u8]; // "server hello not found"
     }
-    let enc_ser_handshake_len = 256*data[server_hello_start+98] as u16 + data[server_hello_start+99] as u16; // let enc_ser_handshake_len = 256*data[298] as u16 + data[299] as u16;
-    println!("enc_ser_handshake_len is : {:?}", &enc_ser_handshake_len);// 16*256 + 249 = 4345
+    let enc_ser_handshake_len =
+        256 * data[server_hello_start + 98] as u16 + data[server_hello_start + 99] as u16; // let enc_ser_handshake_len = 256*data[298] as u16 + data[299] as u16;
     let handshake_end_index = server_hello_start + 95 + 5 + enc_ser_handshake_len as usize; // let handshake_end_index = 295 + 5 + enc_ser_handshake_len as usize;
-    println!("handshake_end_index is : {:?}", &handshake_end_index);
 
-    // let encrypted_server_handshake:[u8;4350] = data[295..handshake_end_index].try_into().unwrap();
+    // let encrypted_server_handshake:[u8;4350] =
+    // data[295..handshake_end_index].try_into().unwrap();
     let encrypted_server_handshake = &data[server_hello_start + 95..handshake_end_index]; // let encrypted_server_handshake = &data[295..handshake_end_index];
-    println!("encrypted_server_handshake is : {:?}", &encrypted_server_handshake);
 
-    let app_request_len = 256*data[handshake_end_index+3] as usize + data[handshake_end_index+4] as usize + 5;
-    //println!("app_request_len is : {:?}", &app_request_len);
-    let application_request = &data[handshake_end_index..handshake_end_index + app_request_len]; // let application_request:[u8;100] = data[handshake_end_index..handshake_end_index+100].try_into().unwrap();
-    println!("application_request is : {:?}", &application_request);
+    let app_request_len =
+        256 * data[handshake_end_index + 3] as usize + data[handshake_end_index + 4] as usize + 5;
+    //let application_request = &data[handshake_end_index..handshake_end_index + app_request_len]; // let application_request:[u8;100] = data[handshake_end_index..handshake_end_index+100].try_into().unwrap();
 
     let mut records_received: u8 = 1;
-    let mut encr_ticket_len = 256*data[handshake_end_index + app_request_len + 3] as usize + data[handshake_end_index + app_request_len+4] as usize +5;
-    println!("encr_ticket_len is : {:?}", &encr_ticket_len);
-    if encr_ticket_len ==241 { // if encr_ticket_len < 300 {
-        encr_ticket_len = encr_ticket_len*2;
+    let mut encr_ticket_len = 256 * data[handshake_end_index + app_request_len + 3] as usize
+        + data[handshake_end_index + app_request_len + 4] as usize
+        + 5;
+    if encr_ticket_len == 241 {
+        // if encr_ticket_len < 300 {
+        encr_ticket_len = encr_ticket_len * 2;
         records_received = 2;
     }
 
-    let encrypted_ticket: &[u8] = &data[handshake_end_index + app_request_len..handshake_end_index + app_request_len + encr_ticket_len];// let encrypted_ticket: &[u8] = &data[handshake_end_index + app_request_len..handshake_end_index + app_request_len +540];// let encrypted_ticket:[u8;540] = data[handshake_end_index+100..handshake_end_index+100+540].try_into().unwrap(); // len of ticket is 524
-    println!("encrypted_ticket is : {:?}", &encrypted_ticket);
+    let encrypted_ticket: &[u8] = &data[handshake_end_index + app_request_len
+        ..handshake_end_index + app_request_len + encr_ticket_len]; // let encrypted_ticket: &[u8] = &data[handshake_end_index + app_request_len..handshake_end_index + app_request_len +540];// let encrypted_ticket:[u8;540] = data[handshake_end_index+100..handshake_end_index+100+540].try_into().unwrap(); // len of ticket is 524
 
-    //let http_response:[u8;1601] = data[handshake_end_index+640..handshake_end_index+640+1601].try_into().unwrap();
+    // let http_response:[u8;1601] =
+    // data[handshake_end_index+640..handshake_end_index+640+1601].try_into().
+    // unwrap();
     let http_response = &data[handshake_end_index + app_request_len + encr_ticket_len..]; // let http_response = &data[handshake_end_index + app_request_len + 540..]; // let http_response = &data[handshake_end_index+640..];
-    println!("encrypted http_response is : {:?}", &http_response);
 
-    let basepoint:[u8;32] = [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    let public_key = curve25519_donna(&private_key, &basepoint);
-    println!("public_key is : {:?}", &public_key);
-
-    println!("records send is : {:?}", records_send);
-    println!("records received is : {:?}", records_received);
+    let public_key = curve25519_donna(&private_key, &BASE_POINT);
 
     let server_hello_data = parse_server_hello(&server_hello[5..]);
 
-    // ================== begin make handshake keys ===============================================================================================
+    // ================== begin make handshake keys
+    // ===============================================================================================
     let zeros = [0u8; 32];
-    let psk = [0u8; 32]; // Предполагается, что psk инициализируется где-то
+    let psk = [0u8; 32];
 
     let shared_secret = curve25519_donna(&private_key, &server_hello_data.public_key);
-    println!("shared_secret is : {:?}", shared_secret);
 
-    // Хэндшейк с использованием HKDF
-    let early_secret = hkdf_sha256::extract(&zeros,&psk);
-
-    println!("early_secret is : {:?}", early_secret);
+    // Handshake using HKDF
+    let early_secret = hkdf_sha256::extract(&zeros, &psk);
     let derived_secret = derive_secret(&early_secret, "derived", &[]);
-    println!("derived_secret is : {:?}", derived_secret);
 
     let handshake_secret = hkdf_sha256::extract(&shared_secret, &derived_secret);
-    println!("self.keys.handshake_secret is : {:?}", handshake_secret);
 
-    let handshake_messages = format::concatenate(
-            &[&client_hello[5..], &server_hello[5..] ]
-    );
-    println!("handshake_messages is : {:?}", handshake_messages);
+    let handshake_messages = format::concatenate(&[&client_hello[5..], &server_hello[5..]]);
 
-    let c_hs_secret = derive_secret(&handshake_secret, "c hs traffic", &handshake_messages);
-    let client_handshake_secret = c_hs_secret.clone();
-    let client_handshake_key: [u8;16] = hkdf_expand_label(&c_hs_secret, "key", &[], 16).try_into().unwrap();
-    //println!("self.keys.client_handshake_key is : {:?}", self.keys.client_handshake_key);
-    let client_handshake_iv: [u8;12] = hkdf_expand_label(&c_hs_secret, "iv", &[], 12).try_into().unwrap();
-    //println!("self.keys.client_handshake_iv is : {:?}", self.keys.client_handshake_iv);
+    //let c_hs_secret = derive_secret(&handshake_secret, "c hs traffic", &handshake_messages);
+    //let client_handshake_secret = c_hs_secret.clone();
+    //let client_handshake_key: [u8; 16] =
+    //hkdf_expand_label(&c_hs_secret, "key", &[], 16).try_into().unwrap();
+    //let client_handshake_iv: [u8; 12] =
+    //hkdf_expand_label(&c_hs_secret, "iv", &[], 12).try_into().unwrap();
 
     let s_hs_secret = derive_secret(&handshake_secret, "s hs traffic", &handshake_messages);
-    //let session_keys_server_handshake_key = hkdf_expand_label(&s_hs_secret, "key", &[], 16);
-    //println!("session_keys_server_handshake_key_ is : {:?}", &session_keys_server_handshake_key);
-    println!("s_hs_secret is : {:?}", s_hs_secret);
-    let server_handshake_key: [u8;16] = hkdf_expand_label(&s_hs_secret, "key", &[], 16).try_into().unwrap();
-    let server_handshake_iv: [u8;12] = hkdf_expand_label(&s_hs_secret, "iv", &[], 12).try_into().unwrap();
+    // let session_keys_server_handshake_key = hkdf_expand_label(&s_hs_secret,
+    // "key", &[], 16);
+
+    let server_handshake_key: [u8; 16] =
+        hkdf_expand_label(&s_hs_secret, "key", &[], 16).try_into().unwrap();
+    let server_handshake_iv: [u8; 12] =
+        hkdf_expand_label(&s_hs_secret, "iv", &[], 12).try_into().unwrap();
 
     // ============== begin parse server handshake =====================
     if encrypted_server_handshake[0] != 0x17 {
-        return vec![0u8, 3u8, 36u8];// "not found encrypted server handshake"
+        return vec![0u8, 3u8, 36u8]; // "not found encrypted server handshake"
     }
 
-    let server_handshake_message = decrypt(&server_handshake_key, &server_handshake_iv, &encrypted_server_handshake[..]);
-    println!("server_handshake_message is : {:?}", &server_handshake_message);
-    let decrypted_server_handshake = DecryptedRecord{ 0: server_handshake_message};
+    let server_handshake_message =
+        decrypt(&server_handshake_key, &server_handshake_iv, &encrypted_server_handshake[..]);
+    let decrypted_server_handshake = DecryptedRecord { 0: server_handshake_message };
 
     // ============= begin make application keys ===================================
-    let handshake_messages = format::concatenate( &[
+    let handshake_messages = format::concatenate(&[
         &client_hello[5..],
         &server_hello[5..],
-        &decrypted_server_handshake.contents()]
-    );
+        &decrypted_server_handshake.contents(),
+    ]);
 
     let derived_secret = derive_secret(&handshake_secret, "derived", &[]);
-    let master_secret = hkdf_sha256::extract(&zeros, &derived_secret);//let master_secret = Hkdf::<Sha256>::extract(Some(&zeros), &derived_secret);
+    let master_secret = hkdf_sha256::extract(&zeros, &derived_secret); //let master_secret = Hkdf::<Sha256>::extract(Some(&zeros), &derived_secret);
 
-    let c_ap_secret = derive_secret(&master_secret, "c ap traffic", &handshake_messages);
-    let client_application_key: [u8;16] = hkdf_expand_label(&c_ap_secret, "key", &[], 16).try_into().unwrap();
-    let client_application_iv: [u8;12] = hkdf_expand_label(&c_ap_secret, "iv", &[], 12).try_into().unwrap();
+    // let c_ap_secret = derive_secret(&master_secret, "c ap traffic",
+    // &handshake_messages); let client_application_key: [u8;16] =
+    // hkdf_expand_label(&c_ap_secret, "key", &[], 16).try_into().unwrap();
+    // let client_application_iv: [u8;12] = hkdf_expand_label(&c_ap_secret, "iv",
+    // &[], 12).try_into().unwrap();
 
     let s_ap_secret = derive_secret(&master_secret, "s ap traffic", &handshake_messages);
-    let server_application_key: [u8;16] = hkdf_expand_label(&s_ap_secret, "key", &[], 16).try_into().unwrap();
-    let server_application_iv: [u8;12] = hkdf_expand_label(&s_ap_secret, "iv", &[], 12).try_into().unwrap();
+    let server_application_key: [u8; 16] =
+        hkdf_expand_label(&s_ap_secret, "key", &[], 16).try_into().unwrap();
+    let server_application_iv: [u8; 12] =
+        hkdf_expand_label(&s_ap_secret, "iv", &[], 12).try_into().unwrap();
 
     // ========== begin check handshake ================
-    let handshake_data = decrypted_server_handshake.contents();//[5..];
-    //let certs_chain = &handshake_data[7..];
+    let handshake_data = decrypted_server_handshake.contents(); //[5..];
+    // let certs_chain = &handshake_data[7..];
     let len_of_padding = handshake_data[3] as usize;
-    let certs_chain = &handshake_data[4+len_of_padding+1..];
+    let certs_chain = &handshake_data[4 + len_of_padding + 1..];
 
-    //next three bytes is the length of certs chain
-    let certs_chain_len = (certs_chain[0] as usize)*65536 + (certs_chain[1] as usize)*256 + (certs_chain[2] as usize);
-    println!("certs_chain is : {:?}", &certs_chain);
-    println!("certs_chain_len is : {:?}", &certs_chain_len); // must be 4205 = 4096 + 109
+    // next three bytes is the length of certs chain
+    let certs_chain_len = (certs_chain[0] as usize) * 65536
+        + (certs_chain[1] as usize) * 256
+        + (certs_chain[2] as usize);
 
     if certs_chain[certs_chain_len + 3] != 0xf {
-        return vec![0u8, 3u8, 37u8];// "signature not found"
+        return vec![0u8, 3u8, 37u8]; // "signature not found"
     }
 
-    let sign_type = (certs_chain[certs_chain_len + 7] as u16)*256 + (certs_chain[certs_chain_len + 8] as u16);
+    let sign_type =
+        (certs_chain[certs_chain_len + 7] as u16) * 256 + (certs_chain[certs_chain_len + 8] as u16);
 
-    let signature_len = (certs_chain[certs_chain_len + 9] as usize)*256 + (certs_chain[certs_chain_len + 10] as usize);
+    let signature_len = (certs_chain[certs_chain_len + 9] as usize) * 256
+        + (certs_chain[certs_chain_len + 10] as usize);
     let signature = &certs_chain[certs_chain_len + 11..certs_chain_len + 11 + signature_len];
+    // let signature_with_type = concatenate(&[ &certs_chain[certs_chain_len +
+    // 7..certs_chain_len + 8], &signature]);
 
-    let client_server_hello = format::concatenate(&[&client_hello[5..], &server_hello[5..]]);
-    if sign_type!=SHA256WITH_RSAE && sign_type!=SHA256WITH_RSA && sign_type!=ECDSA_WITH_SHA256 && sign_type!=SHA256WITH_RSAPSS {
-        return vec![0u8, 3u8, 38u8];// "not supported (not sha256) type of signature"
-    }
-    let check_sum = hkdf_sha256::sum256(&client_server_hello);
+    let client_server_hello = format::concatenate(&[
+        &client_hello[5..],
+        &server_hello[5..],
+        &handshake_data[..4 + len_of_padding + 1 + certs_chain_len + 3],
+    ]);
 
-    if !check_certs_with_fixed_root(timestamp, &check_sum, &certs_chain[4..certs_chain_len+1], &signature, &external_root_cert) {
+    // if sign_type!=SHA256WITH_RSAE && sign_type!=SHA256WITH_RSA &&
+    // sign_type!=ECDSA_WITH_SHA256 && sign_type!=SHA256WITH_RSAPSS {
+    // return vec![0u8, 3u8, 38u8];// "not supported (not sha256) type of signature"
+    //}
+    let check_sum = hkdf_sha256::sum256(&client_server_hello).to_vec();
+
+    let context: [u8; 98] = [
+        32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+        32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+        32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 84, 76, 83, 32, 49,
+        46, 51, 44, 32, 115, 101, 114, 118, 101, 114, 32, 67, 101, 114, 116, 105, 102, 105, 99, 97,
+        116, 101, 86, 101, 114, 105, 102, 121, 0,
+    ];
+
+    let check_sum_extend = format::concatenate(&[&context, &check_sum]);
+
+    let check_prepared = match sign_type {
+        SHA256WITH_RSAE => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
+        SHA256WITH_RSA => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
+        ECDSA_WITH_SHA256 => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
+        SHA256WITH_RSAPSS => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
+        ECDSA_WITH_SHA384 => sha512::sum384(&check_sum_extend).to_vec(),
+        SHA384WITH_RSAPSS => sha512::sum384(&check_sum_extend).to_vec(),
+        SHA384WITH_RSA => sha512::sum384(&check_sum_extend).to_vec(),
+        SHA384WITH_RSAE => sha512::sum384(&check_sum_extend).to_vec(),
+        _ => return vec![0u8, 3u8, 38u8], // "not supported (not sha256 or 384) type of signature"
+    };
+
+    if !check_certs_with_fixed_root(
+        timestamp,
+        &check_prepared,
+        &certs_chain[4..certs_chain_len + 1],
+        &signature,
+        &external_root_cert,
+    ) {
         return vec![0u8, 3u8, 39u8]; // "error in certificates chain !"
     }
 
     // =================== begin check application request ===================
-    /*let domain = "www.googleapis.com";
-    let etalon_req = format!("GET /oauth2/v3/certs HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", domain);
-    let etalon_req_bytes = etalon_req.as_bytes();
-    //encrypt etalon application request
-    let mut data_vec = etalon_req_bytes.to_vec();
-    data_vec.push(0x17);
-    let additional_length = (data_vec.len() + 16) as u16;
-    let additional = format::concatenate(&[
-        &[0x17, 0x03, 0x03], &format::u16_to_bytes(additional_length)
-    ]);
-    let etalon_encrypted = encrypt(&client_application_key, &client_application_iv, &data_vec[..], &additional[..]);
-    // match with application_request
-    if application_request.to_vec() != etalon_encrypted {
-        return vec![0u8, 3u8, 40u8]; // "incorrect application request !"
-    }*/
+    // let domain = "www.googleapis.com";
+    // let etalon_req = format!("GET /oauth2/v3/certs HTTP/1.1\r\nHost:
+    // {}\r\nConnection: close\r\n\r\n", domain); let etalon_req_bytes =
+    // etalon_req.as_bytes(); encrypt etalon application request
+    // let mut data_vec = etalon_req_bytes.to_vec();
+    // data_vec.push(0x17);
+    // let additional_length = (data_vec.len() + 16) as u16;
+    // let additional = format::concatenate(&[
+    // &[0x17, 0x03, 0x03], &format::u16_to_bytes(additional_length)
+    // ]);
+    // let etalon_encrypted = encrypt(&client_application_key,
+    // &client_application_iv, &data_vec[..], &additional[..]); match with
+    // application_request if application_request.to_vec() != etalon_encrypted {
+    // return vec![0u8, 3u8, 40u8]; // "incorrect application request !"
+    // }
 
-    // =================== begin decryption ticket and check =========================
+    // =================== begin decryption ticket and check
+    // =========================
 
-    // =================== begin decryption application response =====================
-    //let ciphertext = [0x17, 0x03, 0x03, 0x05, 0x5f, 0x62, 0x1f, 0xf7, 0x3b, 0x44, 0xea, 0x1b, 0xe2, 0xde, 0x06, 0x26, 0x45, 0xcb, 0xa5, 0x3d, 0xed, 0x43, 0xd3, 0x59, 0xe5, 0x33, 0x7a, 0x81, 0x2a, 0x9d, 0x3a, 0x16, 0x54, 0x73, 0x14, 0x07, 0x77, 0xf9, 0xa1, 0x23, 0x34, 0x80, 0xfa, 0xb3, 0x04, 0x2a, 0xe3, 0x06, 0xaa, 0xa1, 0x30, 0x31, 0x0a, 0x3e, 0x96, 0x7e, 0xa0, 0x38, 0xa2, 0xc2, 0xfd, 0x6e, 0xb8, 0xcd, 0x63, 0xbd, 0xe6, 0x49, 0x74, 0x2d, 0x1c, 0x0d, 0xeb, 0x96, 0xf1, 0xce, 0x52, 0x3a, 0xfd, 0xb7, 0xcc, 0xed, 0x49, 0xad, 0xd9, 0x64, 0xa2, 0x62, 0x06, 0x19, 0x69, 0x72, 0xa3, 0xd2, 0x68, 0x96, 0xa8, 0x0b, 0x5f, 0xb7, 0x68, 0x62, 0x9d, 0xdc, 0xb2, 0xa0, 0x28, 0x62, 0x25, 0x03, 0x56, 0x89, 0x81, 0x55, 0xa4, 0xf8, 0x2d, 0xea, 0xcd, 0x03, 0x10, 0x4e, 0xdd, 0xed, 0x14, 0x80, 0x02, 0x13, 0x38, 0x40, 0xb3, 0xa2, 0x1e, 0x98, 0x9b, 0xb0, 0x17, 0x93, 0x08, 0x21, 0x42, 0xce, 0xb7, 0x56, 0xa4, 0x3c, 0x18, 0x98, 0x4d, 0x0a, 0x10, 0x2d, 0xc1, 0xc2, 0x05, 0xde, 0x09, 0xb1, 0x46, 0xa7, 0x06, 0x99, 0x3c, 0x7f, 0xa7, 0x57, 0xbb, 0x97, 0x00, 0x40, 0x33, 0x72, 0x77, 0x85, 0x3e, 0xb6, 0x9e, 0xfe, 0x24, 0x91, 0x60, 0xb8, 0x51, 0x63, 0x00, 0x8e, 0x0d, 0xfb, 0x3d, 0x31, 0x44, 0xba, 0x68, 0x23, 0x1c, 0x81, 0x1c, 0xb7, 0x67, 0x36, 0x00, 0x3d, 0x28, 0xf6, 0xe2, 0x11, 0xb3, 0xd5, 0xfe, 0xc1, 0xc6, 0x78, 0x50, 0x4e, 0x3d, 0x93, 0xc3, 0x1e, 0xda, 0xe1, 0x38, 0x29, 0x54, 0xca, 0xae, 0x44, 0x89, 0x08, 0x01, 0x10, 0x6f, 0x89, 0x94, 0x8c, 0x09, 0xe9, 0x61, 0xa2, 0x98, 0x92, 0x29, 0x49, 0x72, 0x80, 0xf6, 0x09, 0x8f, 0x64, 0x57, 0x4b, 0xdd, 0x2e, 0x25, 0x26, 0x9f, 0x7d, 0x40, 0x0f, 0x46, 0x0c, 0x6a, 0x29, 0x07, 0x35, 0x89, 0x71, 0xf4, 0xd1, 0xe4, 0x85, 0xc9, 0x41, 0xfa, 0x58, 0x08, 0x29, 0xeb, 0x38, 0xf4, 0x70, 0x6c, 0xff, 0x0f, 0xd4, 0x1f, 0x14, 0x99, 0xc6, 0xa1, 0x7a, 0xe0, 0xd6, 0x9b, 0xc0, 0x31, 0x29, 0x4a, 0xb7, 0x36, 0xfc, 0x7d, 0x7c, 0xe3, 0xa8, 0x71, 0x07, 0xe2, 0x48, 0x07, 0x40, 0x64, 0xa0, 0x83, 0xb5, 0x41, 0x80, 0x68, 0xb5, 0x1e, 0x74, 0x3f, 0x36, 0x79, 0x57, 0x29, 0x69, 0xe9, 0xb0, 0xa4, 0x6a, 0xbf, 0xd1, 0xf3, 0xbb, 0xa1, 0xda, 0x33, 0x6a, 0xe1, 0x27, 0x62, 0xbe, 0x2a, 0x2e, 0xb9, 0x01, 0xca, 0x43, 0x1c, 0x5b, 0x8f, 0xf1, 0x96, 0xcb, 0x7d, 0x0c, 0x97, 0x5d, 0xb1, 0xd1, 0x0c, 0x64, 0x74, 0xcd, 0x78, 0xb2, 0x6f, 0x02, 0x55, 0x9b, 0x6b, 0xc0, 0x0d, 0xe2, 0x9e, 0x98, 0x16, 0x5f, 0xcd, 0x51, 0xe7, 0xff, 0x9a, 0x6a, 0x9b, 0xd7, 0x9d, 0xdd, 0x78, 0xc3, 0xbf, 0xec, 0xc6, 0x9d, 0xee, 0xe9, 0x2f, 0x94, 0xf9, 0x2d, 0xe3, 0xd6, 0xb5, 0xc6, 0x5c, 0x7e, 0x18, 0x72, 0x74, 0x92, 0x25, 0xc6, 0xff, 0x53, 0x1d, 0xf2, 0x29, 0xc6, 0x30, 0x25, 0x4f, 0xc3, 0x5d, 0x3f, 0x76, 0xf6, 0x9d, 0xff, 0xdb, 0x6d, 0xa2, 0x49, 0x09, 0x88, 0xf8, 0x6d, 0xaf, 0xf4, 0x1e, 0x29, 0xc7, 0xc1, 0x6f, 0x57, 0x5e, 0x5c, 0x0e, 0x4f, 0x9d, 0x99, 0xa6, 0xdd, 0xf6, 0x49, 0xf0, 0xb8, 0x22, 0x55, 0x45, 0x81, 0x27, 0x0f, 0xde, 0x73, 0x79, 0x43, 0xed, 0x4d, 0x66, 0x81, 0xbe, 0x22, 0x8f, 0x87, 0x96, 0x60, 0xb0, 0x55, 0x8a, 0xcb, 0x24, 0x96, 0xbf, 0x1d, 0x85, 0x6f, 0x7c, 0xd7, 0xb2, 0xa4, 0xc7, 0xba, 0xe4, 0xb9, 0x6b, 0x74, 0x1f, 0xee, 0xec, 0xcc, 0x3e, 0x5e, 0xb4, 0xf6, 0xe3, 0xc6, 0x52, 0x5a, 0xe6, 0x97, 0x6d, 0x17, 0x41, 0xc2, 0xf2, 0x4b, 0x5f, 0xf5, 0x07, 0x9e, 0x87, 0x8f, 0xf2, 0xe2, 0xb5, 0x85, 0x09, 0x38, 0xcb, 0x28, 0x5f, 0x42, 0x2a, 0xd9, 0xb7, 0xac, 0x9d, 0xbc, 0x00, 0x6f, 0x9e, 0xa3, 0x5f, 0xbc, 0x80, 0xe3, 0xa4, 0x8d, 0x9d, 0xed, 0xa6, 0xa1, 0x17, 0xdd, 0x96, 0x4a, 0xb3, 0x24, 0x97, 0x02, 0x95, 0x35, 0xc2, 0x87, 0x61, 0xf4, 0x7c, 0x37, 0x1a, 0xa5, 0x6d, 0x2c, 0x09, 0x7b, 0xec, 0x7d, 0x70, 0x8c, 0x8f, 0xde, 0xd5, 0x3c, 0xe3, 0x36, 0xdb, 0x57, 0x68, 0xbe, 0x43, 0xd4, 0x6e, 0x1c, 0xed, 0x7a, 0xca, 0xe7, 0xc7, 0xf7, 0x46, 0x83, 0x48, 0x45, 0x5a, 0x82, 0xc8, 0x63, 0x23, 0xf3, 0x4c, 0xe8, 0x75, 0xa8, 0x07, 0x87, 0x4d, 0xc0, 0x1f, 0x73, 0x5d, 0xa7, 0xd7, 0xa7, 0xc0, 0x78, 0x9d, 0x4c, 0x45, 0xbe, 0xa4, 0x08, 0x02, 0x5e, 0x51, 0x20, 0x0e, 0x9e, 0xef, 0xb3, 0xb4, 0x0e, 0xdf, 0xac, 0x70, 0x1f, 0x88, 0xad, 0x95, 0xb5, 0xc1, 0x82, 0xf7, 0x64, 0xe1, 0xe8, 0x3a, 0x79, 0x37, 0x7a, 0x94, 0x98, 0xf1, 0xee, 0x5a, 0x7a, 0x59, 0x81, 0x3e, 0x4a, 0x2c, 0x4e, 0xbd, 0x9c, 0x98, 0x96, 0x6a, 0xe9, 0x65, 0x2c, 0x92, 0xfe, 0xc3, 0x30, 0xdc, 0x16, 0xee, 0x35, 0xc6, 0x10, 0xfa, 0x36, 0xe7, 0x6a, 0x52, 0xe1, 0x92, 0x64, 0x8b, 0x06, 0xd7, 0x69, 0xb9, 0xc5, 0x24, 0xb6, 0xba, 0xed, 0x97, 0x69, 0x8f, 0xa3, 0xa5, 0xc3, 0xfd, 0x5a, 0x09, 0x7f, 0xa4, 0x6e, 0x7e, 0xfd, 0xec, 0xcf, 0xd3, 0x04, 0x9f, 0xe5, 0x54, 0xc7, 0x74, 0xf0, 0x53, 0xde, 0xc0, 0x65, 0x1d, 0x7b, 0xb1, 0x61, 0x10, 0xda, 0x06, 0x77, 0x30, 0x52, 0x5e, 0x48, 0x9b, 0x13, 0x3f, 0x13, 0x2a, 0x98, 0xc8, 0xc8, 0x3e, 0x7e, 0xdc, 0x84, 0xad, 0xa5, 0xb5, 0x47, 0x91, 0x24, 0xe4, 0x1a, 0x5c, 0xb0, 0x24, 0x65, 0x12, 0x61, 0x76, 0x8b, 0xb1, 0xb1, 0xfe, 0x4a, 0xbb, 0x24, 0xfb, 0x17, 0x18, 0xbe, 0x5e, 0x6c, 0x4b, 0x27, 0x92, 0x7e, 0xe9, 0x77, 0x5a, 0x0b, 0x55, 0xc1, 0xb4, 0xca, 0x8f, 0x66, 0x92, 0xec, 0xa5, 0x8f, 0x13, 0x0a, 0xb7, 0x6d, 0xe6, 0x6b, 0x55, 0xca, 0x4a, 0xad, 0x36, 0x3a, 0xfb, 0xfc, 0x0f, 0xbf, 0x19, 0xd4, 0xb3, 0xa7, 0x64, 0x35, 0x04, 0x43, 0x70, 0xbd, 0x30, 0x28, 0xe9, 0x60, 0xe8, 0x33, 0xd5, 0xf5, 0x22, 0x67, 0x30, 0x0e, 0xcf, 0x41, 0xe2, 0x27, 0xbe, 0x96, 0x1f, 0x27, 0x8b, 0x9f, 0x3e, 0x8d, 0x72, 0xf2, 0xfc, 0x3f, 0xd9, 0xd8, 0x18, 0x72, 0xf6, 0x97, 0xd7, 0x31, 0xc5, 0x52, 0x8b, 0x1f, 0x57, 0x33, 0xf3, 0x81, 0xbe, 0xab, 0x2c, 0x0c, 0x4a, 0x8d, 0x60, 0x82, 0xa1, 0xdf, 0x40, 0x0f, 0x97, 0xb3, 0xf5, 0x60, 0xea, 0x18, 0xa6, 0x8f, 0x77, 0xac, 0x02, 0x8b, 0xf2, 0x74, 0x74, 0x74, 0x57, 0x38, 0x2a, 0x3a, 0xa2, 0x07, 0xbe, 0x16, 0x59, 0x6f, 0x70, 0x22, 0x38, 0x57, 0xb2, 0xf3, 0xd7, 0x70, 0xb6, 0xeb, 0x88, 0x67, 0x9f, 0x3d, 0x69, 0xbf, 0x43, 0xc5, 0x46, 0x1b, 0xed, 0xf0, 0x30, 0x59, 0x59, 0x85, 0xab, 0x7d, 0x6c, 0x53, 0xa7, 0xa3, 0x6f, 0x72, 0xe6, 0xb9, 0xf8, 0x39, 0x31, 0x62, 0x17, 0x53, 0xa7, 0xc8, 0x26, 0xf1, 0xc2, 0x37, 0xd3, 0x6b, 0x80, 0xbc, 0xc4, 0xe3, 0x8a, 0x8c, 0xcb, 0x03, 0x35, 0xf1, 0x13, 0xd0, 0x58, 0x0b, 0xdf, 0xcb, 0x0f, 0xfd, 0xcb, 0xaf, 0x2a, 0xa6, 0x41, 0x28, 0xed, 0x78, 0x20, 0xd1, 0x0e, 0xca, 0xfa, 0x2c, 0x71, 0xaa, 0xf0, 0xce, 0xca, 0x12, 0x0e, 0x6b, 0x50, 0x82, 0xf0, 0xa9, 0x97, 0xc1, 0x08, 0xbc, 0xc9, 0xe5, 0xd4, 0x29, 0x76, 0xe6, 0x1b, 0x95, 0x81, 0x6f, 0x76, 0xe8, 0x8c, 0x3f, 0x01, 0xb3, 0x2f, 0xc6, 0x3c, 0x75, 0x78, 0xc5, 0xdf, 0xd1, 0xa9, 0xa8, 0x9d, 0x05, 0x22, 0x92, 0x90, 0xd9, 0xd8, 0x0f, 0xd4, 0xce, 0xeb, 0x4c, 0x9c, 0x83, 0x2e, 0x5e, 0xef, 0x60, 0x5e, 0xfd, 0xde, 0x27, 0x2f, 0x50, 0x95, 0x2f, 0x5d, 0xa9, 0x81, 0x63, 0x56, 0x1f, 0x36, 0x67, 0xb7, 0xbf, 0x74, 0x0d, 0x2c, 0xdc, 0x86, 0xe5, 0x01, 0xdf, 0xbf, 0x2a, 0x0e, 0xcd, 0x06, 0xf5, 0x88, 0xcd, 0x4c, 0x4b, 0xaa, 0x59, 0x8e, 0x58, 0x4f, 0x4f, 0x72, 0x50, 0x7d, 0x3b, 0x07, 0x0d, 0xbf, 0x18, 0xe0, 0x03, 0xcb, 0x59, 0x25, 0x41, 0x7d, 0x7e, 0xc8, 0x30, 0xfa, 0xd9, 0xc1, 0x2a, 0xea, 0x86, 0x3b, 0xa2, 0x1e, 0x95, 0xad, 0xe3, 0xbe, 0x29, 0xe3, 0x43, 0x8e, 0x87, 0x0e, 0xbb, 0xb8, 0xce, 0xc6, 0x60, 0x23, 0xd1, 0x51, 0x33, 0xf4, 0xbc, 0xa6, 0xe5, 0xed, 0x7c, 0x61, 0x99, 0x2a, 0x55, 0x66, 0xed, 0xa5, 0x5c, 0x99, 0x3a, 0x46, 0xa2, 0xdc, 0xaf, 0xc3, 0x0d, 0x6b, 0x6d, 0xaa, 0x53, 0xca, 0x08, 0x18, 0x70, 0x2d, 0xc9, 0xf4, 0x90, 0xdb, 0x78, 0x40, 0x32, 0x97, 0xc6, 0x8d, 0x35, 0x26, 0x09, 0x1c, 0x1f, 0x53, 0xf8, 0xe4, 0x1c, 0xe7, 0xfd, 0x6d, 0x18, 0x30, 0x4f, 0x98, 0x7e, 0x86, 0x28, 0x6d, 0x9d, 0xae, 0xa0, 0x34, 0x04, 0x19, 0x4e, 0xa3, 0x9e, 0x54, 0x45, 0xeb, 0x48, 0x2b, 0xf0, 0xf8, 0x97, 0x12, 0xa3, 0xaa, 0xb4, 0xe8, 0xbf, 0x41, 0x72, 0x74, 0xbc, 0x88, 0xbf, 0x3c, 0x46, 0x1c, 0x6a, 0x37, 0x69, 0xa1, 0x78, 0x67, 0xc8, 0x34, 0x24, 0x71, 0x98, 0x1c, 0x10, 0xdb, 0x8a, 0x2e, 0x77, 0xea, 0x50, 0xa2, 0x27, 0x11, 0x34, 0x71, 0x5f, 0xc1, 0x66, 0xa3, 0xe5, 0x65, 0xda, 0x60, 0xb3, 0xf3, 0x22, 0x5c, 0x7c, 0xef, 0x5f, 0x6d, 0xd8, 0x1c, 0xe0, 0x88, 0x71, 0x8f, 0xb3, 0x3e, 0x1a, 0xd6, 0x07, 0x26, 0x22, 0x90, 0x56, 0x9a, 0x48, 0x79, 0xc5, 0x61, 0xe6, 0x05, 0xee, 0xb2, 0x7d, 0xdc, 0x7c, 0xc2, 0x9c, 0x7f, 0x26, 0x7e, 0xbf, 0xcf, 0xb5, 0x4f, 0x47, 0x05, 0x00, 0x07, 0xce, 0x48, 0xec, 0x6d, 0x47, 0x15, 0x1d, 0x1c, 0xc2, 0xbe, 0x38, 0x21, 0x9b, 0xd1, 0x9c, 0xb4, 0xd0, 0xe1, 0x1b, 0x12, 0x0b, 0x7e, 0x2e, 0x2b, 0xd7, 0x40, 0x33, 0xd4, 0x47, 0xff, 0xf2, 0xeb, 0x59, 0x36, 0xbb, 0x03, 0xb2, 0x69, 0x45, 0xb4, 0x7c, 0xa5, 0x42, 0xc6, 0x7d, 0xcf, 0x38, 0x7e, 0xf3, 0x45, 0x6c, 0xe7, 0xb4, 0xb5, 0xaf, 0x83, 0x1f, 0xa9, 0x39, 0xef, 0x76, 0x10, 0x7e, 0xe0, 0x15];
-    //let plaintext = [0x48, 0x54, 0x54, 0x50, 0x2f, 0x31, 0x2e, 0x31, 0x20, 0x32, 0x30, 0x30, 0x20, 0x4f, 0x4b, 0x0d, 0x0a, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x3a, 0x20, 0x73, 0x63, 0x61, 0x66, 0x66, 0x6f, 0x6c, 0x64, 0x69, 0x6e, 0x67, 0x20, 0x6f, 0x6e, 0x20, 0x48, 0x54, 0x54, 0x50, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x32, 0x0d, 0x0a, 0x58, 0x2d, 0x58, 0x53, 0x53, 0x2d, 0x50, 0x72, 0x6f, 0x74, 0x65, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x3a, 0x20, 0x30, 0x0d, 0x0a, 0x58, 0x2d, 0x46, 0x72, 0x61, 0x6d, 0x65, 0x2d, 0x4f, 0x70, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x3a, 0x20, 0x53, 0x41, 0x4d, 0x45, 0x4f, 0x52, 0x49, 0x47, 0x49, 0x4e, 0x0d, 0x0a, 0x58, 0x2d, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x2d, 0x54, 0x79, 0x70, 0x65, 0x2d, 0x4f, 0x70, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x3a, 0x20, 0x6e, 0x6f, 0x73, 0x6e, 0x69, 0x66, 0x66, 0x0d, 0x0a, 0x44, 0x61, 0x74, 0x65, 0x3a, 0x20, 0x46, 0x72, 0x69, 0x2c, 0x20, 0x32, 0x30, 0x20, 0x4a, 0x75, 0x6e, 0x20, 0x32, 0x30, 0x32, 0x35, 0x20, 0x31, 0x36, 0x3a, 0x33, 0x39, 0x3a, 0x32, 0x35, 0x20, 0x47, 0x4d, 0x54, 0x0d, 0x0a, 0x45, 0x78, 0x70, 0x69, 0x72, 0x65, 0x73, 0x3a, 0x20, 0x46, 0x72, 0x69, 0x2c, 0x20, 0x32, 0x30, 0x20, 0x4a, 0x75, 0x6e, 0x20, 0x32, 0x30, 0x32, 0x35, 0x20, 0x32, 0x31, 0x3a, 0x35, 0x33, 0x3a, 0x33, 0x32, 0x20, 0x47, 0x4d, 0x54, 0x0d, 0x0a, 0x43, 0x61, 0x63, 0x68, 0x65, 0x2d, 0x43, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x3a, 0x20, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2c, 0x20, 0x6d, 0x61, 0x78, 0x2d, 0x61, 0x67, 0x65, 0x3d, 0x31, 0x38, 0x38, 0x34, 0x37, 0x2c, 0x20, 0x6d, 0x75, 0x73, 0x74, 0x2d, 0x72, 0x65, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x61, 0x74, 0x65, 0x2c, 0x20, 0x6e, 0x6f, 0x2d, 0x74, 0x72, 0x61, 0x6e, 0x73, 0x66, 0x6f, 0x72, 0x6d, 0x0d, 0x0a, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x2d, 0x54, 0x79, 0x70, 0x65, 0x3a, 0x20, 0x61, 0x70, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x2f, 0x6a, 0x73, 0x6f, 0x6e, 0x3b, 0x20, 0x63, 0x68, 0x61, 0x72, 0x73, 0x65, 0x74, 0x3d, 0x55, 0x54, 0x46, 0x2d, 0x38, 0x0d, 0x0a, 0x41, 0x67, 0x65, 0x3a, 0x20, 0x32, 0x39, 0x0d, 0x0a, 0x41, 0x6c, 0x74, 0x2d, 0x53, 0x76, 0x63, 0x3a, 0x20, 0x68, 0x33, 0x3d, 0x22, 0x3a, 0x34, 0x34, 0x33, 0x22, 0x3b, 0x20, 0x6d, 0x61, 0x3d, 0x32, 0x35, 0x39, 0x32, 0x30, 0x30, 0x30, 0x2c, 0x68, 0x33, 0x2d, 0x32, 0x39, 0x3d, 0x22, 0x3a, 0x34, 0x34, 0x33, 0x22, 0x3b, 0x20, 0x6d, 0x61, 0x3d, 0x32, 0x35, 0x39, 0x32, 0x30, 0x30, 0x30, 0x0d, 0x0a, 0x41, 0x63, 0x63, 0x65, 0x70, 0x74, 0x2d, 0x52, 0x61, 0x6e, 0x67, 0x65, 0x73, 0x3a, 0x20, 0x6e, 0x6f, 0x6e, 0x65, 0x0d, 0x0a, 0x56, 0x61, 0x72, 0x79, 0x3a, 0x20, 0x4f, 0x72, 0x69, 0x67, 0x69, 0x6e, 0x2c, 0x58, 0x2d, 0x4f, 0x72, 0x69, 0x67, 0x69, 0x6e, 0x2c, 0x52, 0x65, 0x66, 0x65, 0x72, 0x65, 0x72, 0x2c, 0x41, 0x63, 0x63, 0x65, 0x70, 0x74, 0x2d, 0x45, 0x6e, 0x63, 0x6f, 0x64, 0x69, 0x6e, 0x67, 0x0d, 0x0a, 0x43, 0x6f, 0x6e, 0x6e, 0x65, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x3a, 0x20, 0x63, 0x6c, 0x6f, 0x73, 0x65, 0x0d, 0x0a, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x66, 0x65, 0x72, 0x2d, 0x45, 0x6e, 0x63, 0x6f, 0x64, 0x69, 0x6e, 0x67, 0x3a, 0x20, 0x63, 0x68, 0x75, 0x6e, 0x6b, 0x65, 0x64, 0x0d, 0x0a, 0x0d, 0x0a, 0x34, 0x30, 0x39, 0x0d, 0x0a, 0x7b, 0x0a, 0x20, 0x20, 0x22, 0x6b, 0x65, 0x79, 0x73, 0x22, 0x3a, 0x20, 0x5b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22, 0x61, 0x6c, 0x67, 0x22, 0x3a, 0x20, 0x22, 0x52, 0x53, 0x32, 0x35, 0x36, 0x22, 0x2c, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22, 0x6e, 0x22, 0x3a, 0x20, 0x22, 0x73, 0x53, 0x53, 0x44, 0x59, 0x73, 0x35, 0x32, 0x53, 0x55, 0x6e, 0x59, 0x65, 0x68, 0x78, 0x4f, 0x56, 0x2d, 0x47, 0x5f, 0x65, 0x51, 0x34, 0x37, 0x53, 0x6d, 0x4d, 0x38, 0x6d, 0x39, 0x75, 0x62, 0x54, 0x55, 0x55, 0x30, 0x4b, 0x32, 0x34, 0x4c, 0x70, 0x4e, 0x48, 0x6b, 0x37, 0x6a, 0x34, 0x49, 0x43, 0x4d, 0x2d, 0x50, 0x72, 0x65, 0x42, 0x69, 0x5f, 0x6e, 0x70, 0x42, 0x66, 0x78, 0x79, 0x37, 0x6b, 0x41, 0x6f, 0x42, 0x72, 0x35, 0x4b, 0x53, 0x5f, 0x44, 0x70, 0x32, 0x46, 0x41, 0x52, 0x33, 0x32, 0x6a, 0x69, 0x37, 0x65, 0x79, 0x34, 0x32, 0x4a, 0x74, 0x7a, 0x45, 0x2d, 0x78, 0x72, 0x6b, 0x7a, 0x41, 0x49, 0x31, 0x46, 0x6d, 0x62, 0x4c, 0x35, 0x56, 0x6d, 0x78, 0x52, 0x32, 0x44, 0x33, 0x4a, 0x74, 0x4b, 0x34, 0x53, 0x39, 0x4b, 0x79, 0x74, 0x64, 0x35, 0x64, 0x38, 0x78, 0x63, 0x4e, 0x64, 0x73, 0x42, 0x64, 0x41, 0x48, 0x45, 0x6d, 0x6f, 0x51, 0x79, 0x6a, 0x6a, 0x41, 0x61, 0x66, 0x4c, 0x42, 0x6e, 0x78, 0x2d, 0x48, 0x77, 0x47, 0x4a, 0x65, 0x30, 0x43, 0x37, 0x47, 0x33, 0x56, 0x4a, 0x5a, 0x58, 0x4f, 0x75, 0x34, 0x2d, 0x6b, 0x4b, 0x56, 0x76, 0x34, 0x72, 0x71, 0x77, 0x6c, 0x6e, 0x2d, 0x50, 0x75, 0x4d, 0x6c, 0x77, 0x46, 0x7a, 0x39, 0x44, 0x4e, 0x72, 0x34, 0x75, 0x42, 0x55, 0x67, 0x76, 0x74, 0x71, 0x6d, 0x42, 0x50, 0x53, 0x58, 0x64, 0x41, 0x6a, 0x52, 0x73, 0x6b, 0x62, 0x4d, 0x4a, 0x43, 0x6f, 0x34, 0x65, 0x57, 0x72, 0x52, 0x58, 0x63, 0x7a, 0x51, 0x65, 0x72, 0x64, 0x35, 0x6e, 0x6f, 0x51, 0x41, 0x51, 0x6f, 0x5a, 0x6d, 0x52, 0x4e, 0x46, 0x53, 0x31, 0x38, 0x46, 0x63, 0x63, 0x44, 0x63, 0x74, 0x34, 0x65, 0x66, 0x75, 0x54, 0x34, 0x39, 0x70, 0x48, 0x37, 0x42, 0x41, 0x68, 0x79, 0x35, 0x59, 0x48, 0x66, 0x41, 0x46, 0x76, 0x38, 0x76, 0x4d, 0x67, 0x43, 0x70, 0x52, 0x68, 0x71, 0x64, 0x32, 0x56, 0x41, 0x44, 0x59, 0x4a, 0x66, 0x42, 0x56, 0x6c, 0x4a, 0x38, 0x77, 0x4b, 0x4d, 0x43, 0x43, 0x2d, 0x38, 0x79, 0x7a, 0x63, 0x6b, 0x4c, 0x6a, 0x39, 0x56, 0x32, 0x55, 0x51, 0x5a, 0x53, 0x4f, 0x6d, 0x4a, 0x33, 0x49, 0x6f, 0x42, 0x6f, 0x76, 0x6e, 0x46, 0x30, 0x32, 0x45, 0x4e, 0x30, 0x75, 0x4c, 0x30, 0x62, 0x59, 0x4d, 0x75, 0x6e, 0x56, 0x76, 0x6d, 0x30, 0x59, 0x57, 0x50, 0x72, 0x51, 0x22, 0x2c, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22, 0x6b, 0x69, 0x64, 0x22, 0x3a, 0x20, 0x22, 0x30, 0x64, 0x38, 0x61, 0x36, 0x37, 0x33, 0x39, 0x39, 0x65, 0x37, 0x38, 0x38, 0x32, 0x61, 0x63, 0x61, 0x65, 0x37, 0x64, 0x37, 0x66, 0x36, 0x38, 0x62, 0x32, 0x32, 0x38, 0x30, 0x32, 0x35, 0x36, 0x61, 0x37, 0x39, 0x36, 0x61, 0x35, 0x38, 0x32, 0x22, 0x2c, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22, 0x6b, 0x74, 0x79, 0x22, 0x3a, 0x20, 0x22, 0x52, 0x53, 0x41, 0x22, 0x2c, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22, 0x65, 0x22, 0x3a, 0x20, 0x22, 0x41, 0x51, 0x41, 0x42, 0x22, 0x2c, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22, 0x75, 0x73, 0x65, 0x22, 0x3a, 0x20, 0x22, 0x73, 0x69, 0x67, 0x22, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x7d, 0x2c, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22, 0x61, 0x6c, 0x67, 0x22, 0x3a, 0x20, 0x22, 0x52, 0x53, 0x32, 0x35, 0x36, 0x22, 0x2c, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22, 0x6e, 0x22, 0x3a, 0x20, 0x22, 0x7a, 0x5f, 0x4d, 0x35, 0x68, 0x33, 0x58, 0x43, 0x7a, 0x65, 0x67, 0x66, 0x4f, 0x47, 0x37, 0x6a, 0x46, 0x59, 0x47, 0x57, 0x55, 0x49, 0x75, 0x77, 0x6a, 0x61, 0x5a, 0x35, 0x2d, 0x52, 0x45, 0x5f, 0x63, 0x46, 0x68, 0x6a, 0x7a, 0x64, 0x75, 0x61, 0x68, 0x4e, 0x4a, 0x70, 0x76, 0x5f, 0x73, 0x45, 0x42, 0x44, 0x5f, 0x4b, 0x36, 0x5a, 0x75, 0x61, 0x72, 0x56, 0x54, 0x41, 0x66, 0x59, 0x50, 0x5f, 0x35, 0x66, 0x66, 0x36, 0x6e, 0x55, 0x42, 0x6b, 0x46, 0x79, 0x75, 0x31, 0x44, 0x5a, 0x37, 0x70, 0x5a, 0x69, 0x4e, 0x4a, 0x5f, 0x72, 0x74, 0x56, 0x66, 0x65, 0x66, 0x64, 0x5f, 0x6d, 0x43, 0x55, 0x5a, 0x58, 0x36, 0x69, 0x6f, 0x4c, 0x72, 0x6a, 0x30, 0x49, 0x4a, 0x4e, 0x67, 0x63, 0x57, 0x39, 0x39, 0x7a, 0x67, 0x36, 0x4b, 0x5a, 0x32, 0x39, 0x49, 0x63, 0x65, 0x6f, 0x4f, 0x39, 0x6c, 0x36, 0x30, 0x31, 0x62, 0x79, 0x37, 0x61, 0x6b, 0x7a, 0x4a, 0x6a, 0x30, 0x4e, 0x49, 0x67, 0x32, 0x49, 0x39, 0x4c, 0x33, 0x30, 0x50, 0x77, 0x34, 0x50, 0x63, 0x42, 0x51, 0x75, 0x53, 0x6a, 0x4b, 0x79, 0x69, 0x75, 0x4a, 0x51, 0x54, 0x33, 0x55, 0x4a, 0x52, 0x33, 0x5a, 0x65, 0x50, 0x45, 0x4e, 0x68, 0x30, 0x35, 0x48, 0x55, 0x39, 0x43, 0x5a, 0x42, 0x59, 0x32, 0x7a, 0x4d, 0x4f, 0x76, 0x47, 0x38, 0x77, 0x42, 0x63, 0x38, 0x34, 0x4a, 0x34, 0x78, 0x4b, 0x58, 0x46, 0x38, 0x6e, 0x4a, 0x4e, 0x73, 0x55, 0x2d, 0x6c, 0x65, 0x47, 0x59, 0x7a, 0x78, 0x52, 0x36, 0x46, 0x61, 0x75, 0x61, 0x79, 0x79, 0x42, 0x35, 0x66, 0x36, 0x49, 0x5f, 0x6e, 0x76, 0x5a, 0x44, 0x45, 0x70, 0x39, 0x51, 0x7a, 0x47, 0x45, 0x56, 0x46, 0x4d, 0x58, 0x30, 0x4a, 0x37, 0x56, 0x4e, 0x63, 0x5a, 0x79, 0x59, 0x55, 0x45, 0x68, 0x32, 0x5a, 0x37, 0x77, 0x59, 0x57, 0x58, 0x39, 0x72, 0x79, 0x73, 0x7a, 0x44, 0x34, 0x30, 0x7a, 0x58, 0x55, 0x46, 0x62, 0x74, 0x52, 0x54, 0x39, 0x70, 0x4e, 0x44, 0x38, 0x68, 0x61, 0x55, 0x63, 0x48, 0x5f, 0x48, 0x64, 0x73, 0x79, 0x32, 0x74, 0x65, 0x59, 0x6c, 0x48, 0x71, 0x74, 0x78, 0x34, 0x49, 0x50, 0x79, 0x4c, 0x39, 0x50, 0x44, 0x17];
+    // =================== begin decryption application response
+    // =====================
 
-    let mut len_of_first_packet = (http_response[3] as usize)*256 + (http_response[4] as usize) + 5;
-    println!("len_of_first_packet is : {:?}", &len_of_first_packet);
+    let mut len_of_first_packet =
+        (http_response[3] as usize) * 256 + (http_response[4] as usize) + 5;
 
     let mut iv = server_application_iv.clone();
-    //let mut records_received: u8 = 1;
+    // let mut records_received: u8 = 1;
     iv[11] ^= records_received;
 
-    let mut plaintext = decrypt(&server_application_key, &iv.try_into().unwrap(), &http_response[..len_of_first_packet]);
-    //println!("decrypted app plaintext is : {:?}", &plaintext);
-    println!("{}", String::from_utf8_lossy(&plaintext));
-    plaintext = format::trunc_end_23(&plaintext);//plaintext.pop();
+    let mut plaintext = decrypt(
+        &server_application_key,
+        &iv.try_into().unwrap(),
+        &http_response[..len_of_first_packet],
+    );
+    plaintext = format::trunc_end_with_trailer(&plaintext, 23u8); // trunc end zeroes with 23
 
-    while records_received<records_received_declared-1 {
-        // Увеличиваем количество полученных записей
+    while records_received < records_received_declared - 1 {
         records_received += 1;
         let start_index = len_of_first_packet;
-        let len_of_packet = (http_response[start_index+3] as usize)*256 + (http_response[start_index+4] as usize) + 5;
-        //println!("len_of_packet is : {:?}", &len_of_packet);
+        let len_of_packet = (http_response[start_index + 3] as usize) * 256
+            + (http_response[start_index + 4] as usize)
+            + 5;
 
         let ciphertext2 = &http_response[len_of_first_packet..len_of_first_packet + len_of_packet];
-        //println!("ciphertext2 is : {:?}", &ciphertext2);
         let mut iv2 = server_application_iv.clone();
         iv2[11] ^= records_received;
-        let mut plaintext2 = decrypt(&server_application_key, &iv2.try_into().unwrap(), &ciphertext2);
-        println!("decrypted app plaintext2 is : {:?}", &plaintext2);
-        //plaintext2.pop();
-        plaintext2 = format::trunc_end_23(&plaintext2);
+        let mut plaintext2 =
+            decrypt(&server_application_key, &iv2.try_into().unwrap(), &ciphertext2);
+        // plaintext2.pop();
+        plaintext2 = format::trunc_end_with_trailer(&plaintext2, 23u8); // trunc end zeroes with 23
 
         plaintext.append(&mut plaintext2);
         len_of_first_packet = len_of_first_packet + len_of_packet;
-
-        //println!("{}", String::from_utf8_lossy(&plaintext));
     }
-    //println!("{}", String::from_utf8_lossy(&plaintext));
-
-
-
 
     let plaintext_as_string = String::from_utf8_lossy(&plaintext).to_string();
 
     let expires_timestamp = format::extract_expires(&plaintext_as_string);
 
-    let strings_n = format::extract_all_items("n",&plaintext_as_string); // = format::extract_all_n(&plaintext_as_string);
-    let strings_kid = format::extract_all_items("kid",&plaintext_as_string);
+    let strings_n = format::extract_all_items("n", &plaintext_as_string); // = format::extract_all_n(&plaintext_as_string);
+    let strings_kid = format::extract_all_items("kid", &plaintext_as_string);
 
-    //let mut hashes_n: Vec<u8> = Vec::new();
+    // let mut hashes_n: Vec<u8> = Vec::new();
     let mut counter = 0;
 
     for substring in strings_kid {
-        println!("Found kid: {}", substring);
+        // let mut current = substring.as_bytes().to_vec();
+        let current_decoded_kid = Vec::from_hex(substring).unwrap();
 
-        //let mut current = substring.as_bytes().to_vec();
-        let mut current_decoded_kid = Vec::from_hex(substring).unwrap();
-        println!("current_decoded_kid is : {:?}", &current_decoded_kid);
-
-        if current_decoded_kid.eq(&kid.to_vec()){
-            println!("current n is : {:?}", &strings_n[counter]);
-            let mut current_decoded_n = decode(&strings_n[counter]).unwrap();
-            println!("current_decoded_n is : {:?}", &current_decoded_n);
+        if current_decoded_kid.eq(&kid.to_vec()) {
+            let current_decoded_n = decode(&strings_n[counter]).unwrap();
             let mut result = vec![1u8];
 
             append_uint64(&mut result, expires_timestamp as u64);
-
             result.append(&mut current_decoded_n.to_vec());
 
-            println!("current_decoded_n hex is : {:?}", hex::encode(current_decoded_n));
-
             return result;
-
         }
 
-        //let hash_of_current_n = hkdf_sha256::sum256( &current_decoded_n);
-        //hashes_n.append(&mut hash_of_current_n.to_vec());
+        // let hash_of_current_n = hkdf_sha256::sum256( &current_decoded_n);
+        // hashes_n.append(&mut hash_of_current_n.to_vec());
         counter += 1;
     }
 
-    //let mut result = vec![1u8];
-    //result.push(strings_n.len() as u8);
-    //result.append(&mut hashes_n);
+    // let mut result = vec![1u8];
+    // result.push(strings_n.len() as u8);
+    // result.append(&mut hashes_n);
 
-    //let expires_timestamp = format::extract_expires(&plaintext_as_string);
-    //result.append(&mut expires_timestamp.to_be_bytes().to_vec());
-
+    // let expires_timestamp = format::extract_expires(&plaintext_as_string);
+    // result.append(&mut expires_timestamp.to_be_bytes().to_vec());
 
     return vec![0u8, 3u8, 43u8]; // "kid not found "
 }
-
-
 
 /*
 #[test]

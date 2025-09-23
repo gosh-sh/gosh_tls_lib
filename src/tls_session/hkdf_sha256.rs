@@ -1,10 +1,4 @@
-
-use std::error::Error;
-//use std::io::{self, Read};
-//use std::marker::PhantomData;
-
 const SIZE: usize = 32;
-
 const BLOCK_SIZE: usize = 64;
 
 const CHUNK: usize = 64;
@@ -27,7 +21,7 @@ const INIT_7: u32 = 0x5BE0CD19;
 
 const MAGIC224: &[u8] = b"sha\x02";
 const MAGIC256: &[u8] = b"sha\x03";
-const MARSHALLED_SIZE: usize = MAGIC256.len() + 8*4 + CHUNK + 8;
+const MARSHALLED_SIZE: usize = MAGIC256.len() + 8 * 4 + CHUNK + 8;
 
 fn append_uint32(b: &mut Vec<u8>, v: u32) {
     b.push((v >> 24) as u8);
@@ -90,10 +84,8 @@ fn consume_uint32(b: &mut &[u8]) -> u32 {
         //return Err("Not enough bytes for u32".into());
         panic!("Not enough bytes for u32")
     }
-    let result = (b[3] as u32)
-        | ((b[2] as u32) << 8)
-        | ((b[1] as u32) << 16)
-        | ((b[0] as u32) << 24);
+    let result =
+        (b[3] as u32) | ((b[2] as u32) << 8) | ((b[1] as u32) << 16) | ((b[0] as u32) << 24);
     *b = &b[4..];
     //Ok(result)
     result
@@ -123,17 +115,16 @@ pub struct Digest {
     x: [u8; CHUNK],
     nx: usize,
     len: u64,
-    //is224: bool, 
+    //is224: bool,
 }
 
 impl Digest {
-
     pub fn marshal_binary(&self) -> Result<Vec<u8>, &'static str> {
         let mut b = Vec::with_capacity(MARSHALLED_SIZE);
         //if self.is224 {
-            //b.extend_from_slice(MAGIC224);
+        //b.extend_from_slice(MAGIC224);
         //} else {
-            b.extend_from_slice(MAGIC256);
+        b.extend_from_slice(MAGIC256);
         //}
 
         for &hash in &self.h {
@@ -141,23 +132,23 @@ impl Digest {
         }
 
         b.extend_from_slice(&self.x[..self.nx]);
-        //b.truncate(b.len() + self.x.len() - self.nx); // уже нулевой
-        b.resize(b.len() + self.x.len() - self.nx, 0); // // уже нулевой
+        //b.truncate(b.len() + self.x.len() - self.nx); // already zero
+        b.resize(b.len() + self.x.len() - self.nx, 0); // already zero
         append_uint64(&mut b, self.len);
 
         Ok(b)
     }
 
     // fn unmarshal_binary(&mut self, b: &[u8]) -> Result<(), Box<dyn Error>> {
-    fn unmarshal_binary(&mut self, b: &[u8])  {
+    fn unmarshal_binary(&mut self, b: &[u8]) {
         //if &b[..MAGIC256.len()] != MAGIC256 //b.len() < MAGIC224.len()
-            //|| (self.is224 && &b[..MAGIC224.len()] != MAGIC224)
-            //|| (!self.is224 && &b[..MAGIC256.len()] != MAGIC256)
+        //|| (self.is224 && &b[..MAGIC224.len()] != MAGIC224)
+        //|| (!self.is224 && &b[..MAGIC256.len()] != MAGIC256)
         //{
-            //return Err("crypto/sha256: invalid hash state identifier".into());
+        //return Err("crypto/sha256: invalid hash state identifier".into());
         //}
         //if b.len() != MARSHALLED_SIZE {
-            //return Err("crypto/sha256: invalid hash state size".into());
+        //return Err("crypto/sha256: invalid hash state size".into());
         //}
         let mut b = &b[MAGIC224.len()..];
 
@@ -208,9 +199,9 @@ impl Digest {
 
     pub fn size(&self) -> usize {
         //if !self.is224 {
-            SIZE
+        SIZE
         //} else {
-            //SIZE_224
+        //SIZE_224
         //}
     }
 
@@ -224,16 +215,16 @@ impl Digest {
         let nn = p.len();
         self.len += nn as u64;
 
-        let mut remaining = p;// Оставшиеся данные для записи
+        let mut remaining = p; // Remaining data to be written
 
-        // Если есть данные в nx, завершаем их
+        // If there is data in nx, terminate it
         if self.nx > 0 {
             let n = remaining.len().min(CHUNK - self.nx);
             self.x[self.nx..self.nx + n].copy_from_slice(&remaining[..n]);
             self.nx += n;
             if self.nx == CHUNK {
                 //let selfx = &self.x.clone();//[0u8;CHUNK];
-                // Обработка полного блока
+                // Processing a full block
                 block(self, &self.x.clone()); // block(self, &self.x);
                 self.nx = 0;
             }
@@ -241,7 +232,7 @@ impl Digest {
         }
 
         if remaining.len() >= CHUNK {
-            let n = remaining.len() & ! (CHUNK - 1);
+            let n = remaining.len() & !(CHUNK - 1);
             block(self, &remaining[..n]);
             remaining = &remaining[n..];
         }
@@ -255,28 +246,23 @@ impl Digest {
     }
 
     pub fn sum(&self, in_bytes: &[u8]) -> Vec<u8> {
-        // Сделаем копию self, чтобы вызывающая сторона могла продолжать писать и суммировать.
+        // make a copy of self so that the caller can continue writing and summing.
         let mut d0 = self.clone();
-        let hash = d0.check_sum(); // Важно: вам нужно реализовать метод check_sum
+        let hash = d0.check_sum();
         //if d0.is224 {
-            //[in_bytes, &hash[..SIZE_224]].concat()
+        //[in_bytes, &hash[..SIZE_224]].concat()
         //} else {
-            [in_bytes, &hash].concat()
+        [in_bytes, &hash].concat()
         //}
     }
 
-    // Логика проверки суммы
     fn check_sum(&mut self) -> [u8; SIZE] {
         let len = self.len;
         // Padding. Add a 1 bit and 0 bits until 56 bytes mod 64.
         let mut tmp = [0u8; 64 + 8]; // padding + length buffer
         tmp[0] = 0x80;
 
-        let t = if len % 64 < 56 {
-            56 - len % 64
-        } else {
-            64 + 56 - len % 64
-        };
+        let t = if len % 64 < 56 { 56 - len % 64 } else { 64 + 56 - len % 64 };
 
         let len_in_bits = len << 3;
         let padlen = &mut tmp[..(t as usize) + 8];
@@ -298,7 +284,7 @@ impl Digest {
         put_uint32(&mut digest[20..24], self.h[5]);
         put_uint32(&mut digest[24..28], self.h[6]);
         //if !self.is224 {
-            put_uint32(&mut digest[28..32], self.h[7]);
+        put_uint32(&mut digest[28..32], self.h[7]);
         //}
 
         digest
@@ -308,9 +294,9 @@ impl Digest {
 // Sum256 returns the SHA256 checksum of the data.
 pub fn sum256(data: &[u8]) -> [u8; SIZE] {
     let mut d = Digest::new();
-	d.reset();
-	d.write(data);
-	d.check_sum()
+    d.reset();
+    d.write(data);
+    d.check_sum()
 }
 
 const K: [u32; 64] = [
@@ -324,7 +310,6 @@ const K: [u32; 64] = [
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
-
 fn rotate_left_32(x: u32, k: i32) -> u32 {
     const N: u32 = 32;
     let s = (k as u32) & (N - 1);
@@ -336,16 +321,16 @@ fn block(dig: &mut Digest, p: &[u8]) {
     let (mut h0, mut h1, mut h2, mut h3, mut h4, mut h5, mut h6, mut h7) =
         (dig.h[0], dig.h[1], dig.h[2], dig.h[3], dig.h[4], dig.h[5], dig.h[6], dig.h[7]);
 
-    let chunk = CHUNK; // Замените на нужный размер
+    let chunk = CHUNK;
     let mut pos = 0;
 
     while pos + chunk <= p.len() {
         for i in 0..16 {
             let j = i * 4;
-            w[i] = (p[pos+j] as u32) << 24
-                | (p[pos+j + 1] as u32) << 16
-                | (p[pos+j + 2] as u32) << 8
-                | (p[pos+j + 3] as u32);
+            w[i] = (p[pos + j] as u32) << 24
+                | (p[pos + j + 1] as u32) << 16
+                | (p[pos + j + 2] as u32) << 8
+                | (p[pos + j + 3] as u32);
         }
         for i in 16..64 {
             let v1 = w[i - 2];
@@ -353,12 +338,14 @@ fn block(dig: &mut Digest, p: &[u8]) {
             let v2 = w[i - 15];
             let t2 = rotate_left_32(v2, -7) ^ rotate_left_32(v2, -18) ^ (v2 >> 3);
             w[i] = t1.wrapping_add(w[i - 7]).wrapping_add(t2).wrapping_add(w[i - 16]);
-
         }
         let (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h) =
             (h0, h1, h2, h3, h4, h5, h6, h7);
         for i in 0..64 {
-            let t1 = h.wrapping_add((rotate_left_32(e, -6) ^ rotate_left_32(e, -11) ^ rotate_left_32(e, -25)))
+            let t1 = h
+                .wrapping_add(
+                    rotate_left_32(e, -6) ^ rotate_left_32(e, -11) ^ rotate_left_32(e, -25),
+                )
                 .wrapping_add((e & f) ^ (!e & g))
                 .wrapping_add(K[i])
                 .wrapping_add(w[i]);
@@ -407,8 +394,6 @@ pub struct Hmac {
 }
 
 impl Hmac {
-
-    // Функция для создания нового HMAC
     pub fn new(key: &[u8]) -> Hmac {
         let mut hmac = Hmac {
             opad: Vec::new(),
@@ -472,10 +457,9 @@ impl Hmac {
     }
 
     pub fn reset(&mut self) {
-
         if self.marshaled {
             //if let Err(err) = self.inner.unmarshal_binary(&self.ipad) {
-                //panic!("{}", err);
+            //panic!("{}", err);
             //}
             self.inner.unmarshal_binary(&self.ipad);
             return;
@@ -502,12 +486,8 @@ impl Hmac {
     }
 }
 
-
 //========================================================
-
-
 pub fn extract(secret: &[u8; 32], salt: &[u8; 32]) -> [u8; 32] {
-
     //let salt = salt.unwrap_or(&vec![0; 32]);
     let mut extractor = Hmac::new(salt);
     extractor.write(secret);
@@ -515,27 +495,21 @@ pub fn extract(secret: &[u8; 32], salt: &[u8; 32]) -> [u8; 32] {
 }
 
 pub struct Hkdf {
-    expander: Hmac,// expander: HmacSha256,
-    size: usize, 
-    info: Vec<u8>, 
-    counter: u8, 
-    prev: Vec<u8>, 
-    buf: Vec<u8>, 
+    expander: Hmac, // expander: HmacSha256,
+    size: usize,
+    info: Vec<u8>,
+    counter: u8,
+    prev: Vec<u8>,
+    buf: Vec<u8>,
 }
 
 impl Hkdf {
     // fn new(expander: HmacSha256, info: Vec<u8>) -> Self {
     pub fn new(expander: Hmac, info: Vec<u8>) -> Self {
         let size = expander.size(); // let size = expander.output_size();
-        Self {
-            expander,
-            size,
-            info,
-            counter: 1,
-            prev: Vec::new(),
-            buf: Vec::new(),
-        }
+        Self { expander, size, info, counter: 1, prev: Vec::new(), buf: Vec::new() }
     }
+
     //
 
     // fn read(&mut self, p: &mut [u8]) -> io::Result<usize> {
@@ -558,11 +532,11 @@ impl Hkdf {
 
         while p.len() > n {
             self.expander.reset();
-            self.expander.write(&self.prev);//self.expander.update(&self.prev);
-            self.expander.write(&self.info);//self.expander.update(&self.info);
-            self.expander.write(&[self.counter]);//self.expander.update(&[self.counter]);
+            self.expander.write(&self.prev); //self.expander.update(&self.prev);
+            self.expander.write(&self.info); //self.expander.update(&self.info);
+            self.expander.write(&[self.counter]); //self.expander.update(&[self.counter]);
 
-            self.prev = self.expander.sum(&self.prev[..]);//self.prev = self.expander.finalize_reset().into_bytes().to_vec();
+            self.prev = self.expander.sum(&self.prev[..]); //self.prev = self.expander.finalize_reset().into_bytes().to_vec();
             self.counter += 1;
 
             // Copy the new batch into p
@@ -576,8 +550,8 @@ impl Hkdf {
             //*p = &p[new_size..];
             p.drain(..new_size);
 
-            // Обновление buf для последующих вызовов
-            self.buf.clear(); // Не забываем очищать buf перед новым заполнением
+            // Update buf for subsequent calls
+            self.buf.clear(); // Don't forget to clear buf before refilling
             self.buf.extend_from_slice(&self.prev);
         }
 
@@ -588,15 +562,12 @@ impl Hkdf {
     }
 }
 
-
 // fn expand(hash: fn() -> HmacSha256, pseudorandom_key: &[u8], info: &[u8]) -> Hkdf<io::Empty> {
 pub fn expand(pseudorandom_key: &[u8], info: &[u8]) -> Hkdf {
-    let mut expander = Hmac::new(pseudorandom_key);//let mut expander = hash();
+    let expander = Hmac::new(pseudorandom_key); //let mut expander = hash();
     //expander.update(pseudorandom_key);
     Hkdf::new(expander, info.to_vec())
 }
-
-
 
 /*
 #[test]

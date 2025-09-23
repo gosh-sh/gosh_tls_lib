@@ -1,10 +1,13 @@
-use std::fs::File;
-use std::io::{self, BufRead};
 //use std::io::Read;
 //use std::path::Path;
 use std::error::Error;
+use std::fs::File;
+use std::io::BufRead;
+use std::io::{self};
 
-const BASE_POINT:[u8;32] = [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+pub const BASE_POINT: [u8; 32] = [
+    9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
 
 /* Field element representation:
  *
@@ -15,17 +18,18 @@ const BASE_POINT:[u8;32] = [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
  * i.e. the limbs are 26, 25, 26, 25, ... bits wide.
  */
 
-fn print_array19(input: &[i64; 19]){
+fn print_array19(input: &[i64; 19]) {
     print!(" {{");
     for i in 0..19 {
-        print!("{}", input[i] );
+        print!("{}", input[i]);
         print!(" ");
     }
     println!(" }}");
 }
 
 // Sum two numbers: output += in
-fn fsum(in1: &[i64; 19], in2: &[i64; 19]) -> [i64; 19]{ // fn fsum(output: &mut [i64; 10], input: &[i64; 10]) {
+fn fsum(in1: &[i64; 19], in2: &[i64; 19]) -> [i64; 19] {
+    // fn fsum(output: &mut [i64; 10], input: &[i64; 10]) {
     let mut output: [i64; 19] = [0; 19];
     for i in (0..10).step_by(2) {
         output[i] = in1[i] + in2[i];
@@ -34,7 +38,8 @@ fn fsum(in1: &[i64; 19], in2: &[i64; 19]) -> [i64; 19]{ // fn fsum(output: &mut 
     output
 }
 
-fn fdifference(output: &mut [i64; 19], input: &[i64; 19]) { // fn fdifference(output: &mut [i64; 10], input: &[i64; 10]) {
+fn fdifference(output: &mut [i64; 19], input: &[i64; 19]) {
+    // fn fdifference(output: &mut [i64; 10], input: &[i64; 10]) {
     for i in 0..10 {
         output[i] = input[i] - output[i];
     }
@@ -48,103 +53,107 @@ fn fscalar_product(output: &mut [i64; 19], input: &[i64; 19], scalar: i64) {
 
 fn fproduct(output: &mut [i64; 19], in2: &[i64; 19], in1: &[i64; 19]) {
     output[0] = (in2[0] as i32 as i64) * (in1[0] as i32 as i64);
-    output[1] = (in2[0] as i32 as i64) * (in1[1] as i32 as i64) + (in2[1] as i32 as i64) * (in1[0] as i32 as i64);
-    output[2] = 2 * ( (in2[1] as i32 as i64) * (in1[1] as i32) as i64) +
-        (in2[0] as i32 as i64) * (in1[2] as i32 as i64) +
-        (in2[2] as i32 as i64) * (in1[0] as i32 as i64);
-    output[3] = (in2[1] as i32 as i64) * (in1[2] as i32 as i64) +
-        (in2[2] as i32 as i64) * (in1[1] as i32 as i64) +
-        (in2[0] as i32 as i64) * (in1[3] as i32 as i64) +
-        (in2[3] as i32 as i64) * (in1[0] as i32 as i64);
-    output[4] = (in2[2] as i32 as i64) * (in1[2] as i32) as i64 +
-                 2 * ( (in2[1] as i32 as i64) * (in1[3] as i32) as i64 +
-                     (in2[3] as i32 as i64) * (in1[1] as i32) as i64) +
-        (in2[0] as i32 as i64) * (in1[4] as i32) as i64 +
-        (in2[4] as i32 as i64) * (in1[0] as i32) as i64;
-    output[5] = (in2[2] as i32 as i64) * (in1[3] as i32) as i64 +
-        (in2[3] as i32 as i64) * (in1[2] as i32) as i64 +
-        (in2[1] as i32 as i64) * (in1[4] as i32) as i64 +
-        (in2[4] as i32 as i64) * (in1[1] as i32) as i64 +
-        (in2[0] as i32 as i64) * (in1[5] as i32) as i64 +
-        (in2[5] as i32 as i64) * (in1[0] as i32) as i64;
-    output[6] = 2 * ( (in2[3] as i32 as i64) * (in1[3] as i32) as i64 +
-        (in2[1] as i32 as i64) * (in1[5] as i32) as i64 +
-        (in2[5] as i32 as i64) * (in1[1] as i32) as i64) +
-        (in2[2] as i32 as i64) * (in1[4] as i32) as i64 +
-        (in2[4] as i32 as i64) * (in1[2] as i32) as i64 +
-        (in2[0] as i32 as i64) * (in1[6] as i32) as i64 +
-        (in2[6] as i32 as i64) * (in1[0] as i32) as i64;
-    output[7] = (in2[3] as i32 as i64) * (in1[4] as i32) as i64 +
-        (in2[4] as i32 as i64) * (in1[3] as i32) as i64 +
-        (in2[2] as i32 as i64) * (in1[5] as i32) as i64 +
-        (in2[5] as i32 as i64) * (in1[2] as i32) as i64 +
-        (in2[1] as i32 as i64) * (in1[6] as i32) as i64 +
-        (in2[6] as i32 as i64) * (in1[1] as i32) as i64 +
-        (in2[0] as i32 as i64) * (in1[7] as i32) as i64 +
-        (in2[7] as i32 as i64) * (in1[0] as i32) as i64;
-    output[8] = (in2[4] as i32 as i64) * (in1[4] as i32) as i64 +
-                 2 * ( (in2[3] as i32 as i64) * (in1[5] as i32) as i64 +
-                     (in2[5] as i32 as i64) * (in1[3] as i32) as i64 +
-                     (in2[1] as i32 as i64) * (in1[7] as i32) as i64 +
-                     (in2[7] as i32 as i64) * (in1[1] as i32) as i64) +
-        (in2[2] as i32 as i64) * (in1[6] as i32) as i64 +
-        (in2[6] as i32 as i64) * (in1[2] as i32) as i64 +
-        (in2[0] as i32 as i64) * (in1[8] as i32) as i64 +
-        (in2[8] as i32 as i64) * (in1[0] as i32) as i64;
-    output[9] = (in2[4] as i32 as i64) * (in1[5] as i32) as i64 +
-        (in2[5] as i32 as i64) * (in1[4] as i32) as i64 +
-        (in2[3] as i32 as i64) * (in1[6] as i32) as i64 +
-        (in2[6] as i32 as i64) * (in1[3] as i32) as i64 +
-        (in2[2] as i32 as i64) * (in1[7] as i32) as i64 +
-        (in2[7] as i32 as i64) * (in1[2] as i32) as i64 +
-        (in2[1] as i32 as i64) * (in1[8] as i32) as i64 +
-        (in2[8] as i32 as i64) * (in1[1] as i32) as i64 +
-        (in2[0] as i32 as i64) * (in1[9] as i32) as i64 +
-        (in2[9] as i32 as i64) * (in1[0] as i32) as i64;
-    output[10] = 2 * ( (in2[5] as i32 as i64) * (in1[5] as i32) as i64 +
-        (in2[3] as i32 as i64) * (in1[7] as i32) as i64 +
-        (in2[7] as i32 as i64) * (in1[3] as i32) as i64 +
-        (in2[1] as i32 as i64) * (in1[9] as i32) as i64 +
-        (in2[9] as i32 as i64) * (in1[1] as i32) as i64) +
-        (in2[4] as i32 as i64) * (in1[6] as i32) as i64 +
-        (in2[6] as i32 as i64) * (in1[4] as i32) as i64 +
-        (in2[2] as i32 as i64) * (in1[8] as i32) as i64 +
-        (in2[8] as i32 as i64) * (in1[2] as i32) as i64;
-    output[11] = (in2[5] as i32 as i64) * (in1[6] as i32) as i64 +
-        (in2[6] as i32 as i64) * (in1[5] as i32) as i64 +
-        (in2[4] as i32 as i64) * (in1[7] as i32) as i64 +
-        (in2[7] as i32 as i64) * (in1[4] as i32) as i64 +
-        (in2[3] as i32 as i64) * (in1[8] as i32) as i64 +
-        (in2[8] as i32 as i64) * (in1[3] as i32) as i64 +
-        (in2[2] as i32 as i64) * (in1[9] as i32) as i64 +
-            (in2[9] as i32 as i64) * (in1[2] as i32) as i64;
-    output[12] = (in2[6] as i32 as i64) * (in1[6] as i32) as i64 +
-                 2 * ( (in2[5] as i32 as i64) * (in1[7] as i32) as i64 +
-                     (in2[7] as i32 as i64) * (in1[5] as i32) as i64 +
-                     (in2[3] as i32 as i64) * (in1[9] as i32) as i64 +
-                     (in2[9] as i32 as i64) * (in1[3] as i32) as i64) +
-        (in2[4] as i32 as i64) * (in1[8] as i32) as i64 +
-        (in2[8] as i32 as i64) * (in1[4] as i32) as i64;
-    output[13] = (in2[6] as i32 as i64) * (in1[7] as i32) as i64 +
-        (in2[7] as i32 as i64) * (in1[6] as i32) as i64 +
-        (in2[5] as i32 as i64) * (in1[8] as i32) as i64 +
-        (in2[8] as i32 as i64) * (in1[5] as i32) as i64 +
-        (in2[4] as i32 as i64) * (in1[9] as i32) as i64 +
-        (in2[9] as i32 as i64) * (in1[4] as i32) as i64;
-    output[14] = 2 * ((in2[7] as i32 as i64) * (in1[7] as i32) as i64 +
-        (in2[5] as i32 as i64) * (in1[9] as i32) as i64 +
-        (in2[9] as i32 as i64) * (in1[5] as i32) as i64) +
-        (in2[6] as i32 as i64) * (in1[8] as i32) as i64 +
-        (in2[8] as i32 as i64) * (in1[6] as i32) as i64;
-    output[15] = (in2[7] as i32 as i64) * (in1[8] as i32) as i64 +
-        (in2[8] as i32 as i64) * (in1[7] as i32) as i64 +
-        (in2[6] as i32 as i64) * (in1[9] as i32) as i64 +
-        (in2[9] as i32 as i64) * (in1[6] as i32) as i64;
-    output[16] = (in2[8] as i32 as i64) * (in1[8] as i32) as i64 +
-                 2 * ( (in2[7] as i32 as i64) * (in1[9] as i32) as i64 +
-                     (in2[9] as i32 as i64) * (in1[7] as i32) as i64);
-    output[17] = (in2[8] as i32 as i64) * (in1[9] as i32) as i64 +
-        (in2[9] as i32 as i64) * (in1[8] as i32) as i64;
+    output[1] = (in2[0] as i32 as i64) * (in1[1] as i32 as i64)
+        + (in2[1] as i32 as i64) * (in1[0] as i32 as i64);
+    output[2] = 2 * ((in2[1] as i32 as i64) * (in1[1] as i32) as i64)
+        + (in2[0] as i32 as i64) * (in1[2] as i32 as i64)
+        + (in2[2] as i32 as i64) * (in1[0] as i32 as i64);
+    output[3] = (in2[1] as i32 as i64) * (in1[2] as i32 as i64)
+        + (in2[2] as i32 as i64) * (in1[1] as i32 as i64)
+        + (in2[0] as i32 as i64) * (in1[3] as i32 as i64)
+        + (in2[3] as i32 as i64) * (in1[0] as i32 as i64);
+    output[4] = (in2[2] as i32 as i64) * (in1[2] as i32) as i64
+        + 2 * ((in2[1] as i32 as i64) * (in1[3] as i32) as i64
+            + (in2[3] as i32 as i64) * (in1[1] as i32) as i64)
+        + (in2[0] as i32 as i64) * (in1[4] as i32) as i64
+        + (in2[4] as i32 as i64) * (in1[0] as i32) as i64;
+    output[5] = (in2[2] as i32 as i64) * (in1[3] as i32) as i64
+        + (in2[3] as i32 as i64) * (in1[2] as i32) as i64
+        + (in2[1] as i32 as i64) * (in1[4] as i32) as i64
+        + (in2[4] as i32 as i64) * (in1[1] as i32) as i64
+        + (in2[0] as i32 as i64) * (in1[5] as i32) as i64
+        + (in2[5] as i32 as i64) * (in1[0] as i32) as i64;
+    output[6] = 2
+        * ((in2[3] as i32 as i64) * (in1[3] as i32) as i64
+            + (in2[1] as i32 as i64) * (in1[5] as i32) as i64
+            + (in2[5] as i32 as i64) * (in1[1] as i32) as i64)
+        + (in2[2] as i32 as i64) * (in1[4] as i32) as i64
+        + (in2[4] as i32 as i64) * (in1[2] as i32) as i64
+        + (in2[0] as i32 as i64) * (in1[6] as i32) as i64
+        + (in2[6] as i32 as i64) * (in1[0] as i32) as i64;
+    output[7] = (in2[3] as i32 as i64) * (in1[4] as i32) as i64
+        + (in2[4] as i32 as i64) * (in1[3] as i32) as i64
+        + (in2[2] as i32 as i64) * (in1[5] as i32) as i64
+        + (in2[5] as i32 as i64) * (in1[2] as i32) as i64
+        + (in2[1] as i32 as i64) * (in1[6] as i32) as i64
+        + (in2[6] as i32 as i64) * (in1[1] as i32) as i64
+        + (in2[0] as i32 as i64) * (in1[7] as i32) as i64
+        + (in2[7] as i32 as i64) * (in1[0] as i32) as i64;
+    output[8] = (in2[4] as i32 as i64) * (in1[4] as i32) as i64
+        + 2 * ((in2[3] as i32 as i64) * (in1[5] as i32) as i64
+            + (in2[5] as i32 as i64) * (in1[3] as i32) as i64
+            + (in2[1] as i32 as i64) * (in1[7] as i32) as i64
+            + (in2[7] as i32 as i64) * (in1[1] as i32) as i64)
+        + (in2[2] as i32 as i64) * (in1[6] as i32) as i64
+        + (in2[6] as i32 as i64) * (in1[2] as i32) as i64
+        + (in2[0] as i32 as i64) * (in1[8] as i32) as i64
+        + (in2[8] as i32 as i64) * (in1[0] as i32) as i64;
+    output[9] = (in2[4] as i32 as i64) * (in1[5] as i32) as i64
+        + (in2[5] as i32 as i64) * (in1[4] as i32) as i64
+        + (in2[3] as i32 as i64) * (in1[6] as i32) as i64
+        + (in2[6] as i32 as i64) * (in1[3] as i32) as i64
+        + (in2[2] as i32 as i64) * (in1[7] as i32) as i64
+        + (in2[7] as i32 as i64) * (in1[2] as i32) as i64
+        + (in2[1] as i32 as i64) * (in1[8] as i32) as i64
+        + (in2[8] as i32 as i64) * (in1[1] as i32) as i64
+        + (in2[0] as i32 as i64) * (in1[9] as i32) as i64
+        + (in2[9] as i32 as i64) * (in1[0] as i32) as i64;
+    output[10] = 2
+        * ((in2[5] as i32 as i64) * (in1[5] as i32) as i64
+            + (in2[3] as i32 as i64) * (in1[7] as i32) as i64
+            + (in2[7] as i32 as i64) * (in1[3] as i32) as i64
+            + (in2[1] as i32 as i64) * (in1[9] as i32) as i64
+            + (in2[9] as i32 as i64) * (in1[1] as i32) as i64)
+        + (in2[4] as i32 as i64) * (in1[6] as i32) as i64
+        + (in2[6] as i32 as i64) * (in1[4] as i32) as i64
+        + (in2[2] as i32 as i64) * (in1[8] as i32) as i64
+        + (in2[8] as i32 as i64) * (in1[2] as i32) as i64;
+    output[11] = (in2[5] as i32 as i64) * (in1[6] as i32) as i64
+        + (in2[6] as i32 as i64) * (in1[5] as i32) as i64
+        + (in2[4] as i32 as i64) * (in1[7] as i32) as i64
+        + (in2[7] as i32 as i64) * (in1[4] as i32) as i64
+        + (in2[3] as i32 as i64) * (in1[8] as i32) as i64
+        + (in2[8] as i32 as i64) * (in1[3] as i32) as i64
+        + (in2[2] as i32 as i64) * (in1[9] as i32) as i64
+        + (in2[9] as i32 as i64) * (in1[2] as i32) as i64;
+    output[12] = (in2[6] as i32 as i64) * (in1[6] as i32) as i64
+        + 2 * ((in2[5] as i32 as i64) * (in1[7] as i32) as i64
+            + (in2[7] as i32 as i64) * (in1[5] as i32) as i64
+            + (in2[3] as i32 as i64) * (in1[9] as i32) as i64
+            + (in2[9] as i32 as i64) * (in1[3] as i32) as i64)
+        + (in2[4] as i32 as i64) * (in1[8] as i32) as i64
+        + (in2[8] as i32 as i64) * (in1[4] as i32) as i64;
+    output[13] = (in2[6] as i32 as i64) * (in1[7] as i32) as i64
+        + (in2[7] as i32 as i64) * (in1[6] as i32) as i64
+        + (in2[5] as i32 as i64) * (in1[8] as i32) as i64
+        + (in2[8] as i32 as i64) * (in1[5] as i32) as i64
+        + (in2[4] as i32 as i64) * (in1[9] as i32) as i64
+        + (in2[9] as i32 as i64) * (in1[4] as i32) as i64;
+    output[14] = 2
+        * ((in2[7] as i32 as i64) * (in1[7] as i32) as i64
+            + (in2[5] as i32 as i64) * (in1[9] as i32) as i64
+            + (in2[9] as i32 as i64) * (in1[5] as i32) as i64)
+        + (in2[6] as i32 as i64) * (in1[8] as i32) as i64
+        + (in2[8] as i32 as i64) * (in1[6] as i32) as i64;
+    output[15] = (in2[7] as i32 as i64) * (in1[8] as i32) as i64
+        + (in2[8] as i32 as i64) * (in1[7] as i32) as i64
+        + (in2[6] as i32 as i64) * (in1[9] as i32) as i64
+        + (in2[9] as i32 as i64) * (in1[6] as i32) as i64;
+    output[16] = (in2[8] as i32 as i64) * (in1[8] as i32) as i64
+        + 2 * ((in2[7] as i32 as i64) * (in1[9] as i32) as i64
+            + (in2[9] as i32 as i64) * (in1[7] as i32) as i64);
+    output[17] = (in2[8] as i32 as i64) * (in1[9] as i32) as i64
+        + (in2[9] as i32 as i64) * (in1[8] as i32) as i64;
     output[18] = 2 * ((in2[9] as i32 as i64) * (in1[9] as i32) as i64);
 }
 
@@ -206,7 +215,8 @@ fn div_s32_by_2_25(v: i32) -> i32 {
 /* Reduce all coefficients of the short form input so that |x| < 2^26.
  * On entry: |output[i]| < 2^62
  */
-fn freduce_coefficients(output: &mut [i64; 19]) { //fn freduce_coefficients(output: &mut [i64; 11]) {
+fn freduce_coefficients(output: &mut [i64; 19]) {
+    //fn freduce_coefficients(output: &mut [i64; 11]) {
     output[10] = 0;
 
     for i in (0..10).step_by(2) {
@@ -241,7 +251,6 @@ fn freduce_coefficients(output: &mut [i64; 19]) { //fn freduce_coefficients(outp
     // but it will require an extra freduce_coefficients before fcontract.
 }
 
-
 /* A helpful wrapper around fproduct: output = in * in2.
  *
  * output must be distinct to both inputs. The output is reduced degree and
@@ -258,59 +267,70 @@ fn fmul(output: &mut [i64; 19], in_data: &[i64; 19], in2: &[i64; 19]) {
 fn fsquare_inner(output: &mut [i64; 19], input: &[i64; 19]) {
     output[0] = ((input[0] as i32) as i64) * ((input[0] as i32) as i64);
     output[1] = 2 * (input[0] as i32 as i64) * (input[1] as i32 as i64);
-    output[2] = 2 * (((input[1] as i32 as i64) * (input[1] as i32 as i64)) +
-                     ((input[0] as i32 as i64) * (input[2] as i32 as i64)));
-    output[3] = 2 * (((input[1] as i32 as i64) * (input[2] as i32 as i64)) +
-                     ((input[0] as i32 as i64) * (input[3] as i32 as i64)));
-    output[4] = ((input[2] as i32 as i64) * (input[2] as i32 as i64)) +
-                 4 * ((input[1] as i32 as i64) * (input[3] as i32 as i64)) +
-                 2 * ((input[0] as i32 as i64) * (input[4] as i32 as i64));
-    output[5] = 2 * (((input[2] as i32 as i64) * (input[3] as i32 as i64)) +
-                     ((input[1] as i32 as i64) * (input[4] as i32 as i64)) +
-                     ((input[0] as i32 as i64) * (input[5] as i32 as i64)));
-    output[6] = 2 * (((input[3] as i32 as i64) * (input[3] as i32 as i64)) +
-                     ((input[2] as i32 as i64) * (input[4] as i32 as i64)) +
-                     ((input[0] as i32 as i64) * (input[6] as i32 as i64)) +
-                     2 * ((input[1] as i32 as i64) * (input[5] as i32 as i64)));
-    output[7] = 2 * (((input[3] as i32 as i64) * (input[4] as i32 as i64)) +
-                     ((input[2] as i32 as i64) * (input[5] as i32 as i64)) +
-                     ((input[1] as i32 as i64) * (input[6] as i32 as i64)) +
-                     ((input[0] as i32 as i64) * (input[7] as i32 as i64)));
-    output[8] = ((input[4] as i32 as i64) * (input[4] as i32 as i64)) +
-                 2 * (((input[2] as i32 as i64) * (input[6] as i32 as i64)) +
-                       ((input[0] as i32 as i64) * (input[8] as i32 as i64)) +
-                       2 * (((input[1] as i32 as i64) * (input[7] as i32 as i64)) +
-                       ((input[3] as i32 as i64) * (input[5] as i32 as i64))));
-    output[9] = 2 * (((input[4] as i32 as i64) * (input[5] as i32 as i64)) +
-                     ((input[3] as i32 as i64) * (input[6] as i32 as i64)) +
-                     ((input[2] as i32 as i64) * (input[7] as i32 as i64)) +
-                     ((input[1] as i32 as i64) * (input[8] as i32 as i64)) +
-                     ((input[0] as i32 as i64) * (input[9] as i32 as i64)));
-    output[10] = 2 * (((input[5] as i32 as i64) * (input[5] as i32 as i64)) +
-                      ((input[4] as i32 as i64) * (input[6] as i32 as i64)) +
-                      ((input[2] as i32 as i64) * (input[8] as i32 as i64)) +
-                      2 * (((input[3] as i32 as i64) * (input[7] as i32 as i64)) +
-                      ((input[1] as i32 as i64) * (input[9] as i32 as i64))));
-    output[11] = 2 * (((input[5] as i32 as i64) * (input[6] as i32 as i64)) +
-                      ((input[4] as i32 as i64) * (input[7] as i32 as i64)) +
-                      ((input[3] as i32 as i64) * (input[8] as i32 as i64)) +
-                      ((input[2] as i32 as i64) * (input[9] as i32 as i64)));
-    output[12] = ((input[6] as i32 as i64) * (input[6] as i32 as i64)) +
-                  2 * (((input[4] as i32 as i64) * (input[8] as i32 as i64)) +
-                  2 * (((input[5] as i32 as i64) * (input[7] as i32 as i64)) +
-                  ((input[3] as i32 as i64) * (input[9] as i32 as i64))));
-    output[13] = 2 * (((input[6] as i32 as i64) * (input[7] as i32 as i64)) +
-                      ((input[5] as i32 as i64) * (input[8] as i32 as i64)) +
-                      ((input[4] as i32 as i64) * (input[9] as i32 as i64)));
-    output[14] = 2 * (((input[7] as i32 as i64) * (input[7] as i32 as i64)) +
-                      ((input[6] as i32 as i64) * (input[8] as i32 as i64)) +
-                      2 * ((input[5] as i32 as i64) * (input[9] as i32 as i64)));
-    output[15] = 2 * (((input[7] as i32 as i64) * (input[8] as i32 as i64)) +
-                      ((input[6] as i32 as i64) * (input[9] as i32 as i64)));
-    output[16] = ((input[8] as i32 as i64) * (input[8] as i32 as i64)) +
-                  4 * (((input[7] as i32 as i64) * (input[9] as i32 as i64)));
-    output[17] = 2 * (((input[8] as i32 as i64) * (input[9] as i32 as i64)));
-    output[18] = 2 * (((input[9] as i32 as i64) * (input[9] as i32 as i64)));
+    output[2] = 2
+        * (((input[1] as i32 as i64) * (input[1] as i32 as i64))
+            + ((input[0] as i32 as i64) * (input[2] as i32 as i64)));
+    output[3] = 2
+        * (((input[1] as i32 as i64) * (input[2] as i32 as i64))
+            + ((input[0] as i32 as i64) * (input[3] as i32 as i64)));
+    output[4] = ((input[2] as i32 as i64) * (input[2] as i32 as i64))
+        + 4 * ((input[1] as i32 as i64) * (input[3] as i32 as i64))
+        + 2 * ((input[0] as i32 as i64) * (input[4] as i32 as i64));
+    output[5] = 2
+        * (((input[2] as i32 as i64) * (input[3] as i32 as i64))
+            + ((input[1] as i32 as i64) * (input[4] as i32 as i64))
+            + ((input[0] as i32 as i64) * (input[5] as i32 as i64)));
+    output[6] = 2
+        * (((input[3] as i32 as i64) * (input[3] as i32 as i64))
+            + ((input[2] as i32 as i64) * (input[4] as i32 as i64))
+            + ((input[0] as i32 as i64) * (input[6] as i32 as i64))
+            + 2 * ((input[1] as i32 as i64) * (input[5] as i32 as i64)));
+    output[7] = 2
+        * (((input[3] as i32 as i64) * (input[4] as i32 as i64))
+            + ((input[2] as i32 as i64) * (input[5] as i32 as i64))
+            + ((input[1] as i32 as i64) * (input[6] as i32 as i64))
+            + ((input[0] as i32 as i64) * (input[7] as i32 as i64)));
+    output[8] = ((input[4] as i32 as i64) * (input[4] as i32 as i64))
+        + 2 * (((input[2] as i32 as i64) * (input[6] as i32 as i64))
+            + ((input[0] as i32 as i64) * (input[8] as i32 as i64))
+            + 2 * (((input[1] as i32 as i64) * (input[7] as i32 as i64))
+                + ((input[3] as i32 as i64) * (input[5] as i32 as i64))));
+    output[9] = 2
+        * (((input[4] as i32 as i64) * (input[5] as i32 as i64))
+            + ((input[3] as i32 as i64) * (input[6] as i32 as i64))
+            + ((input[2] as i32 as i64) * (input[7] as i32 as i64))
+            + ((input[1] as i32 as i64) * (input[8] as i32 as i64))
+            + ((input[0] as i32 as i64) * (input[9] as i32 as i64)));
+    output[10] = 2
+        * (((input[5] as i32 as i64) * (input[5] as i32 as i64))
+            + ((input[4] as i32 as i64) * (input[6] as i32 as i64))
+            + ((input[2] as i32 as i64) * (input[8] as i32 as i64))
+            + 2 * (((input[3] as i32 as i64) * (input[7] as i32 as i64))
+                + ((input[1] as i32 as i64) * (input[9] as i32 as i64))));
+    output[11] = 2
+        * (((input[5] as i32 as i64) * (input[6] as i32 as i64))
+            + ((input[4] as i32 as i64) * (input[7] as i32 as i64))
+            + ((input[3] as i32 as i64) * (input[8] as i32 as i64))
+            + ((input[2] as i32 as i64) * (input[9] as i32 as i64)));
+    output[12] = ((input[6] as i32 as i64) * (input[6] as i32 as i64))
+        + 2 * (((input[4] as i32 as i64) * (input[8] as i32 as i64))
+            + 2 * (((input[5] as i32 as i64) * (input[7] as i32 as i64))
+                + ((input[3] as i32 as i64) * (input[9] as i32 as i64))));
+    output[13] = 2
+        * (((input[6] as i32 as i64) * (input[7] as i32 as i64))
+            + ((input[5] as i32 as i64) * (input[8] as i32 as i64))
+            + ((input[4] as i32 as i64) * (input[9] as i32 as i64)));
+    output[14] = 2
+        * (((input[7] as i32 as i64) * (input[7] as i32 as i64))
+            + ((input[6] as i32 as i64) * (input[8] as i32 as i64))
+            + 2 * ((input[5] as i32 as i64) * (input[9] as i32 as i64)));
+    output[15] = 2
+        * (((input[7] as i32 as i64) * (input[8] as i32 as i64))
+            + ((input[6] as i32 as i64) * (input[9] as i32 as i64)));
+    output[16] = ((input[8] as i32 as i64) * (input[8] as i32 as i64))
+        + 4 * ((input[7] as i32 as i64) * (input[9] as i32 as i64));
+    output[17] = 2 * ((input[8] as i32 as i64) * (input[9] as i32 as i64));
+    output[18] = 2 * ((input[9] as i32 as i64) * (input[9] as i32 as i64));
 }
 
 fn fsquare(output: &mut [i64; 19], input: &[i64; 19]) {
@@ -329,9 +349,11 @@ fn fexpand(output: &mut [i64; 19], input: &[u8; 32]) {
     macro_rules! F {
         ($n:expr, $start:expr, $shift:expr, $mask:expr) => {
             output[$n] = (((input[$start + 0] as i64)
-                          | ((input[$start + 1] as i64) << 8)
-                          | ((input[$start + 2] as i64) << 16)
-                          | ((input[$start + 3] as i64) << 24)) >> $shift) & $mask;
+                | ((input[$start + 1] as i64) << 8)
+                | ((input[$start + 2] as i64) << 16)
+                | ((input[$start + 3] as i64) << 24))
+                >> $shift)
+                & $mask;
         };
     }
 
@@ -405,12 +427,19 @@ fn fcontract(output: &mut [u8; 32], input: &mut [i64; 19]) {
     F!(9, 28);
 }
 
-fn fmonty(x2: &mut [i64; 19], z2: &mut [i64; 19], // output 2Q
-                x3: &mut [i64; 19], z3: &mut [i64; 19], // output Q + Q'
-                x: &mut [i64; 19], z: &mut [i64; 19], // input Q
-                xprime: &mut [i64; 19], zprime: &mut [i64; 19], // input Q'
-                qmqp: &[i64; 19] ) { //  input Q - Q'
-    let mut origx = [0; 19];  // let mut origx = [0; 10];
+fn fmonty(
+    x2: &mut [i64; 19],
+    z2: &mut [i64; 19], // output 2Q
+    x3: &mut [i64; 19],
+    z3: &mut [i64; 19], // output Q + Q'
+    x: &mut [i64; 19],
+    z: &mut [i64; 19], // input Q
+    xprime: &mut [i64; 19],
+    zprime: &mut [i64; 19], // input Q'
+    qmqp: &[i64; 19],
+) {
+    //  input Q - Q'
+    let mut origx = [0; 19]; // let mut origx = [0; 10];
     let mut origxprime = [0; 19]; // let mut origxprime = [0; 10];
     let mut zzz = [0; 19];
     let mut xx = [0; 19];
@@ -421,11 +450,11 @@ fn fmonty(x2: &mut [i64; 19], z2: &mut [i64; 19], // output 2Q
     let mut xxxprime = [0; 19];
 
     origx.copy_from_slice(x); // copy only 10 items!!!
-    let x = fsum(x,z);//fsum(x, z);
+    let x = fsum(x, z); //fsum(x, z);
     fdifference(z, &origx); // z becomes x - z
 
     origxprime.copy_from_slice(xprime); // Копируем xprime в origxprime
-    let xprime = fsum(xprime, zprime);//fsum(xprime, zprime);
+    let xprime = fsum(xprime, zprime); //fsum(xprime, zprime);
     fdifference(zprime, &origxprime); // zprime становится xprime - zprime
     fproduct(&mut xxprime, &xprime, z);
     fproduct(&mut zzprime, &x, zprime);
@@ -435,7 +464,7 @@ fn fmonty(x2: &mut [i64; 19], z2: &mut [i64; 19], // output 2Q
     freduce_degree(&mut zzprime);
     freduce_coefficients(&mut zzprime);
     origxprime.copy_from_slice(&xxprime); // Копируем xxprime в origxprime
-    let xxprime = fsum(&xxprime, &zzprime);//fsum(&mut xxprime, &zzprime);
+    let xxprime = fsum(&xxprime, &zzprime); //fsum(&mut xxprime, &zzprime);
 
     fdifference(&mut zzprime, &origxprime); // zzprime становится xxprime - zzprime
     fsquare(&mut xxxprime, &xxprime);
@@ -464,7 +493,7 @@ fn fmonty(x2: &mut [i64; 19], z2: &mut [i64; 19], // output 2Q
     // No need to call freduce_degree here:
     // fscalar_product doesn't increase the degree of its input.
     freduce_coefficients(&mut zzz);
-    let zzz = fsum(&zzz, &xx);//fsum(&mut zzz, &xx);
+    let zzz = fsum(&zzz, &xx); //fsum(&mut zzz, &xx);
     fproduct(z2, &zz, &zzz);
     freduce_degree(z2);
     freduce_coefficients(z2);
@@ -484,8 +513,10 @@ fn swap_conditional(a: &mut [i64; 19], b: &mut [i64; 19], iswap: i64) {
 
 fn cmult(resultx: &mut [i64; 19], resultz: &mut [i64; 19], n: &[u8; 32], q: &[i64; 19]) {
     let mut a = [0; 19];
-    let mut b = [0; 19]; b[0] = 1; //[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    let mut c = [0; 19]; c[0] = 1; //[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut b = [0; 19];
+    b[0] = 1; //[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut c = [0; 19];
+    c[0] = 1; //[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let mut d = [0; 19];
 
     let mut nqpqx = &mut a;
@@ -494,9 +525,11 @@ fn cmult(resultx: &mut [i64; 19], resultz: &mut [i64; 19], n: &[u8; 32], q: &[i6
     let mut nqz = &mut d;
 
     let mut e = [0; 19];
-    let mut f = [0; 19]; f[0] = 1; //[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut f = [0; 19];
+    f[0] = 1; //[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let mut g = [0; 19];
-    let mut h = [0; 19]; h[0] = 1; //[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut h = [0; 19];
+    h[0] = 1; //[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
     let mut nqpqx2 = &mut e;
     let mut nqpqz2 = &mut f;
@@ -516,7 +549,6 @@ fn cmult(resultx: &mut [i64; 19], resultz: &mut [i64; 19], n: &[u8; 32], q: &[i6
             swap_conditional(nqx, nqpqx, bit);
             //println!("bit is : {bit},");
             swap_conditional(nqz, nqpqz, bit);
-
 
             fmonty(nqx2, nqz2, nqpqx2, nqpqz2, nqx, nqz, nqpqx, nqpqz, q);
             /*println!("nqx2 is : ");
@@ -631,12 +663,12 @@ fn crecip(out: &mut [i64; 19], z: &[i64; 19]) {
         fsquare(&mut t0, &t1);
         fsquare(&mut t1, &t0);
     }
-    fmul(& mut t0,&t1,&z2_50_0);
-    fsquare(&mut t1,&t0);
-    fsquare(&mut t0,&t1); // 2^252 - 2^2
-    fsquare(&mut t1,&t0); // 2^253 - 2^3
-    fsquare(&mut t0,&t1); // 2^254 - 2^4
-    fsquare(&mut t1,&t0); // 2^255 - 2^5
+    fmul(&mut t0, &t1, &z2_50_0);
+    fsquare(&mut t1, &t0);
+    fsquare(&mut t0, &t1); // 2^252 - 2^2
+    fsquare(&mut t1, &t0); // 2^253 - 2^3
+    fsquare(&mut t0, &t1); // 2^254 - 2^4
+    fsquare(&mut t1, &t0); // 2^255 - 2^5
 
     fmul(out, &t1, &z11); /* 2^255 - 21 */
 }
@@ -752,7 +784,6 @@ fn base64_decode(data: &mut Vec<u8>, len: &mut usize) {
     *len = write;
 }
 
-
 fn read_key(filename: &str, key: &mut [u8; 32]) -> Result<(), Box<dyn Error>> {
     let file = File::open(filename)?;
     let reader = io::BufReader::new(file);
@@ -797,7 +828,7 @@ fn cc_test_with_files(){
     println!("result is : {:?}", etalon_result);
 
     read_key("server-ephemeral-private.key", &mut privkey);
-	read_key("client-ephemeral-public.key", &mut pubkey);
+    read_key("client-ephemeral-public.key", &mut pubkey);
     println!("server ephemeral private key is : {:?}", privkey);
     println!("client ephemeral public key is : {:?}", pubkey);
     let result = curve25519_donna(&privkey, &pubkey);
