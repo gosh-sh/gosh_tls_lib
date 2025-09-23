@@ -67,7 +67,7 @@ pub fn get_root_cert_kakao() -> [u8; 914] {
     certs::ROOT_KAKAO_CERT
 }
 
-pub fn get_root_cert_facebook_2() -> [u8; /*969*/ 914] {
+pub fn get_root_cert_facebook_2() -> [u8; 914] {
     certs::ROOT_FACEBOOK_CERT_2
 }
 
@@ -81,24 +81,24 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
     let mut map: HashMap<String, String> = HashMap::new();
     match domain {
         "www.googleapis.com" => {
-            for root_cert_hex in certs::GOOGLE_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap());
+            for root_cert_hex in certs::LV_GOOGLE_ROOTS_CERTS {
+                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]);
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
             return Ok(map);
         }
         "kauth.kakao.com" => {
-            for root_cert_hex in certs::KAKAO_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap());
+            for root_cert_hex in certs::LV_KAKAO_ROOTS_CERTS {
+                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]);
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
             return Ok(map);
         }
         "www.facebook.com" => {
-            for root_cert_hex in certs::FACEBOOK_ROOTS_CERTS {
-                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap());
+            for root_cert_hex in certs::LV_FACEBOOK_ROOTS_CERTS {
+                let root_cert = certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]);
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
