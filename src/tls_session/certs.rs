@@ -3465,7 +3465,7 @@ pub fn check_certs_with_fixed_root(
     root_cert_bytes: &[u8],
 ) -> bool {
     //
-    let check_certs_result = check_certs(current_time, check_sum, certs_chain, signature);
+    let check_certs_result = check_certs_wasm(current_time, check_sum, certs_chain, signature, root_cert_bytes);
     if check_certs_result.is_none() {
         return false;
     }
@@ -3541,6 +3541,161 @@ pub fn check_certs_with_known_roots(
     }
     return Some(result);
 }
+
+
+pub fn check_certs_wasm(
+    current_time: i64,
+    check_sum: &[u8],
+    certs_chain: &[u8],
+    signature: &[u8],
+    spare_root_cert: &[u8]
+) -> Option<PublicKey> {
+    // extract
+    // divide input string into three slices
+
+    let len_of_certs_chain = (certs_chain[0] as usize) * 65536
+        + (certs_chain[1] as usize) * 256
+        + (certs_chain[2] as usize);
+
+    if len_of_certs_chain + 1 != certs_chain.len() {
+        return None;
+    }
+
+    let len_of_leaf_cert = (certs_chain[3] as usize) * 65536
+        + (certs_chain[4] as usize) * 256
+        + (certs_chain[5] as usize);
+
+    let leaf_cert_slice = &certs_chain[6..len_of_leaf_cert + 6];
+
+    let mut leaf_cert = parse_certificate(leaf_cert_slice); // leafCert, err := x509.ParseCertificate(leafCertSlice)
+
+    if leaf_cert.not_after.timestamp() < current_time
+        || leaf_cert.not_before.timestamp() > current_time
+    {
+        return None;
+    }
+
+    let start_index = len_of_leaf_cert + 8;
+    let len_of_internal_cert = (certs_chain[start_index] as usize) * 65536
+        + (certs_chain[start_index + 1] as usize) * 256
+        + (certs_chain[start_index + 2] as usize);
+
+    let internal_cert_slice = &certs_chain[start_index + 3..start_index + len_of_internal_cert + 3];
+
+    let mut internal_cert = parse_certificate(internal_cert_slice); // internalCert, err := x509.ParseCertificate(internalCertSlice)
+
+    if internal_cert.not_after.timestamp() < current_time
+        || internal_cert.not_before.timestamp() > current_time
+    {
+        return None;
+    }
+
+    let start_index = start_index + 3 + len_of_internal_cert + 2;
+
+    let root_cert = if start_index + 2 < certs_chain.len() {
+        let len_of_root_cert = (certs_chain[start_index] as usize) * 65536
+            + (certs_chain[start_index + 1] as usize) * 256
+            + (certs_chain[start_index + 2] as usize);
+        let root_cert_slice = &certs_chain[start_index + 3..start_index + len_of_root_cert + 3];
+        // let root_cert = parse_certificate(root_cert_slice);
+        parse_certificate(root_cert_slice)
+    } else {
+        parse_certificate(&spare_root_cert)//parse_certificate(&ROOT_FACEBOOK_CERT)
+    };
+
+    if root_cert.not_after.timestamp() < current_time
+        || root_cert.not_before.timestamp() > current_time
+    {
+        return None;
+    }
+
+    // let context: [u8; 98] = [32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+    // 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+    // 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+    // 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 84, 76,
+    // 83, 32, 49, 46, 51, 44, 32, 115, 101, 114, 118, 101, 114, 32, 67, 101, 114,
+    // 116, 105, 102, 105, 99, 97, 116, 101, 86, 101, 114, 105, 102, 121, 0];
+
+    // let check_sum_extend = format::concatenate( &[ &context, &check_sum]);
+    // let check_prepared = hkdf_sha256::sum256(&check_sum_extend).to_vec();
+
+    // let check_prepared: [u8; 32] = [147, 105, 160, 151, 89, 237, 59, 225, 198,
+    // 46, 54, 194, 177, 254, 192, 149, 23, 103, 164, 206, 97, 92, 159, 53, 75, 225,
+    // 227, 148, 11, 232, 183, 107]; let sig: [u8; 256] =  [12, 8, 221, 42, 77,
+    // 195, 200, 100, 161, 125, 104, 108, 13, 7, 154, 72, 251, 91, 96, 30, 221, 24,
+    // 214, 117, 114, 47, 207, 151, 211, 81, 234, 75, 51, 247, 238, 9, 156, 164, 72,
+    // 201, 33, 48, 85, 216, 212, 106, 160, 244, 136, 144, 43, 215, 98, 247, 190,
+    // 125, 104, 205, 211, 204, 223, 200, 142, 145, 13, 129, 131, 123, 63, 170, 130,
+    // 147, 238, 25, 143, 102, 81, 253, 114, 37, 42, 200, 208, 181, 156, 128,
+    // 202, 82, 254, 58, 112, 7, 110, 255, 207, 111, 10, 221, 219, 33, 127, 153,
+    // 107, 107, 171, 50, 119, 8, 76, 20, 78, 233, 60, 93, 136, 185, 107, 2,
+    // 209, 105, 167, 206, 99, 242, 189, 51, 35, 203, 118, 129, 7, 214, 243, 240,
+    // 87, 205, 13, 42, 43, 158, 133, 255, 62, 160, 83, 175, 55, 236, 160, 201, 19,
+    // 121, 162, 238, 58, 202, 33, 192, 109, 64, 161, 24, 242, 150, 209, 15, 63, 13,
+    // 68, 31, 123, 183, 220, 230, 83, 40, 110, 5, 186, 255, 203, 175, 139, 102, 24,
+    // 17, 83, 117, 44, 246, 24, 82, 58, 131, 217, 136, 177, 140, 164, 234, 25,
+    // 143, 182, 243, 41, 220, 83, 144, 225, 190, 120, 82, 102, 133, 95, 81, 122,
+    // 246, 161, 162, 128, 189, 0, 195, 247, 2, 240, 210, 69, 17, 217, 92, 217, 12,
+    // 86, 15, 46, 150, 233, 97, 35, 201, 235, 108, 194, 134, 245, 202, 164, 37,
+    // 79, 5, 163, 96, 180, 148];
+
+    if !leaf_cert.check_signature_from(&internal_cert) {
+        panic!("leaf_cert.check_signature_from(&internal_cert)"); //return None;
+    }
+
+    if !internal_cert.check_signature_from(&root_cert) {
+        // return None;
+        panic!("internal_cert.check_signature_from(&root_cert)");
+    }
+
+    match leaf_cert.public_key_algorithm.to_string() {
+        val if val == "RSA".to_string() => {
+            // pubkey, ok := leafCert.PublicKey.(*rsa.PublicKey)
+            if let PublicKey::RsaPublicKey(pub_key) = leaf_cert.public_key {
+                //
+                let pss_options =
+                    rsa::PSSOptions { salt_length: rsa::PSS_SALT_LENGTH_EQUALS_HASH, hash: 0 };
+                if !rsa::verify_pss(&pub_key, 256, check_sum, signature, &pss_options) {
+                    // if !rsa::verify_pss(&pub_key, 256, &check_prepared, &sig, &pss_options) {
+                    // return None;
+                    panic!("verify pss panic");
+                }
+
+                // if !rsa::verify_pkcs1v15(&pub_key,256, &check_prepared,
+                // signature) {
+
+                // panic!("verify pkcs panic"); //return None;
+                //}
+            } else {
+                // return None; //ErrCertificateTypeMismatch
+                panic!("certificate type mismatch panic");
+            }
+        }
+        val if val == "ECDSA".to_string() => {
+            //
+            if let PublicKey::ECDSAPublicKey(pub_key) = leaf_cert.public_key {
+                //
+                let len_of_r = signature[3] as usize; //     lenOfr := signature[3]
+                let r_data = &signature[4..4 + len_of_r]; //     rData := signature[4:4+lenOfr]
+                let len_of_s = signature[4 + len_of_r + 1] as usize;
+                let s_data = &signature[4 + len_of_r + 2..4 + len_of_r + 2 + len_of_s];
+                let r = BigInt::from_bytes_be(Sign::Plus, r_data); //     r := new(big.Int).SetBytes(rData)
+                let s = BigInt::from_bytes_be(Sign::Plus, s_data); //     s := new(big.Int).SetBytes(sData)
+                if !ecdsa::verify(&pub_key, check_sum, &r, &s) {
+                    // return None;
+                    panic!("ecds verify panic");
+                }
+            } else {
+                // return None;  //ErrCertificateTypeMismatch
+                panic!("certificate type mismatch panic");
+            }
+        }
+        _ => panic!("Unknown signature algorithm"),
+    }
+
+    return Some(root_cert.public_key);
+}
+
 
 #[cfg(test)]
 mod tests {
