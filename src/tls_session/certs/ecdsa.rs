@@ -1,5 +1,6 @@
 //use core::ops::Shl;
-use std::ops::{Add, Shl};
+use std::ops::Add;
+use std::ops::Shl;
 use std::str::FromStr;
 
 use num_bigint::BigInt;
