@@ -706,7 +706,7 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
 
     let timestamp_bytes = &raw[..4];
     let len_of_issuer = raw[4] as usize;
-    if len_of_issuer < 10 || len_of_issuer > 100 {
+    if len_of_issuer < 4 || len_of_issuer > 100 {
         return vec![0u8, 3u8, 34u8]; // "corrupted issuer (not lv format) / incorrect issuer len" : 0x3, 0x22 = 802
     }
     let issuer = &raw[5..5 + len_of_issuer];

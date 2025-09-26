@@ -3683,7 +3683,7 @@ pub fn check_certs_wasm(
                 return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
             }
 
-            if issuer!=vec![121, 74, 112, 99, 51, 77, 105, 79, 105, 74, 111, 100, 72, 82, 119, 99, 122, 111, 118, 76, 50, 70, 106, 89, 50, 57, 49, 98, 110, 82, 122, 76, 109, 100, 118, 98, 50, 100, 115, 90, 83, 53, 106, 98, 50, 48, 105, 76, 67]{
+            if issuer!=vec![6, 103, 111, 111, 103, 108, 101] {
                 return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
             }
         },
@@ -3691,7 +3691,7 @@ pub fn check_certs_wasm(
             if internal_cert.subject.common_name!="Thawte TLS RSA CA G1" {
                 return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
             }
-            if issuer!=vec![73, 109, 108, 122, 99, 121, 73, 54, 73, 109, 104, 48, 100, 72, 66, 122, 79, 105, 56, 118, 97, 50, 70, 49, 100, 71, 103, 117, 97, 50, 70, 114, 89, 87, 56, 117, 89, 50, 57, 116, 73, 105, 119] {
+            if issuer!=vec![5, 107, 97, 107, 97, 111] {
                 return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
             }
         },
@@ -3699,7 +3699,7 @@ pub fn check_certs_wasm(
             if internal_cert.subject.common_name!="DigiCert Global G2 TLS RSA SHA256 2020 CA1" {
                 return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
             }
-            if issuer!=vec![121, 74, 112, 99, 51, 77, 105, 79, 105, 74, 111, 100, 72, 82, 119, 99, 122, 112, 99, 76, 49, 119, 118, 100, 51, 100, 51, 76, 109, 90, 104, 89, 50, 86, 105, 98, 50, 57, 114, 76, 109, 78, 118, 98, 83, 73, 115] {
+            if issuer!=vec![8, 102, 97, 99, 101, 98, 111, 111, 107] {
                 return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
             }
         },
