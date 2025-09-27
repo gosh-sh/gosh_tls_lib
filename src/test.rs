@@ -18,32 +18,81 @@ fn append_uint32(b: &mut Vec<u8>, v: u32) {
     b.push(v as u8);
 }
 
+struct ProviderData<'a> {
+    domain: &'a str,
+    jwk_get_request: &'a str,
+    issuer: &'a str,
+    issuer_decoded: &'a str,
+    index_mod_4: u8,
+    kid: Vec<u8>,
+    root_cert: Vec<u8>,
+}
+
+impl ProviderData<'_> {
+    pub fn getGoogle() -> Self {
+        //https://www.googleapis.com/oauth2/v3/certs
+        //let domain = "www.googleapis.com";
+        //let jwk_get_request = "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ";
+        let google_kid: Vec<u8> = hex::decode("927b8fb67bbad77445e5fea4c71aa9846d7ddd01").unwrap();
+        let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g4().to_vec();
+        //let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g1().to_vec();
+        ProviderData {
+            domain: "www.googleapis.com",
+            jwk_get_request: "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ",
+            issuer: "yJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLC",
+            issuer_decoded: "06676f6f676c65", //"794a7063334d694f694a6f64485277637a6f764c32466a59323931626e527a4c6d6476623264735a53356a623230694c43", // "https://accounts.google.com",
+            index_mod_4: 1,
+            kid: google_kid,
+            root_cert: google_root_cert,
+        }
+    }
+
+    pub fn getKakao() -> Self {
+        //https://kauth.kakao.com/.well-known/jwks.json
+        //let domain = "kauth.kakao.com";
+        //let jwk_get_request =  "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ";
+        let kakao_kid: Vec<u8> = hex::decode("3f96980381e451efad0d2ddd30e3d3").unwrap();
+        let kakao_root_cert: Vec<u8> = tls_session::get_root_cert_kakao().to_vec();
+        ProviderData {
+            domain: "kauth.kakao.com",
+            jwk_get_request: "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ",
+            issuer: "ImlzcyI6Imh0dHBzOi8va2F1dGgua2FrYW8uY29tIiw", //
+            issuer_decoded: "056b616b616f", //"496d6c7a63794936496d68306448427a4f6938766132463164476775613246725957387559323974496977", //"https://kauth.kakao.com",
+            index_mod_4: 0,
+            kid: kakao_kid,
+            root_cert: kakao_root_cert,
+        }
+    }
+
+    pub fn getFacebook() -> Self {
+        // https://www.facebook.com/.well-known/oauth/openid/jwks/
+        // let domain = "www.facebook.com";
+        // let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
+        let facebook_kid: Vec<u8> =
+            hex::decode("996af12848fc796cb61a6ab287e4b01dbd78a82f").unwrap();
+        let facebook_root_cert: Vec<u8> = tls_session::get_root_cert_facebook_2().to_vec();
+        ProviderData {
+            domain: "www.facebook.com",
+            jwk_get_request: "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ",
+            issuer: "yJpc3MiOiJodHRwczpcL1wvd3d3LmZhY2Vib29rLmNvbSIs", //
+            issuer_decoded: "0866616365626f6f6b", //"794a7063334d694f694a6f64485277637a70634c317776643364334c6d5a6859325669623239724c6d4e7662534973", // "https://www.facebook.com",
+            index_mod_4: 1,
+            kid: facebook_kid,
+            root_cert: facebook_root_cert,
+        }
+    }
+}
+
 #[test]
 fn main_test() {
-    //https://www.facebook.com/.well-known/oauth/openid/jwks/
-    let domain = "www.facebook.com";
-    //let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
-
-    //https://kauth.kakao.com/.well-known/jwks.json
-    //let domain = "kauth.kakao.com";
-    //let jwk_get_request =  "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ";
-
-    //https://www.googleapis.com/oauth2/v3/certs
-    //let domain = "www.googleapis.com";
-    //let jwk_get_request = "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ";
-
-    let jwk_get_request = match domain {
-        "www.googleapis.com" => "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ",
-        "kauth.kakao.com" => "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ",
-        _ => "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ", // facebook
-    };
-
-    let tls_session = get_jwk_tls_data(domain, jwk_get_request).unwrap();
+    let p = ProviderData::getGoogle();
+    //let p = ProviderData::getKakao();
+    //let p = ProviderData::getFacebook();
+    let tls_session = get_jwk_tls_data(&p.domain, &p.jwk_get_request).unwrap();
 
     println!("TLS session data in hex: {:?}", tls_session.1);
     println!("root cert serial number: {:?}", tls_session.0);
-
-    println!("root certs map: {:?}", get_root_certs_map(domain).unwrap());
+    println!("root certs map: {:?}", get_root_certs_map(&p.domain).unwrap());
 
     let tls_session_hex = tls_session.1;
     let mut tls_session_bytes = hex::decode(tls_session_hex.clone()).unwrap();
@@ -64,20 +113,18 @@ fn main_test() {
     append_uint32(&mut data, current_timestamp);
     println!("tls_session_bytes is : {:?}", tls_session_bytes);
 
-    //let mut kid = hex::decode("927b8fb67bbad77445e5fea4c71aa9846d7ddd01").unwrap(); // google kid
-    //let mut kid = hex::decode("3f96980381e451efad0d2ddd30e3d3").unwrap(); // kakao kid
-    let mut kid = hex::decode("996af12848fc796cb61a6ab287e4b01dbd78a82f").unwrap(); // facebook kid kid
-    println!("kid is : {:?}", kid);
-    let mut root_cert = match domain {
-        "www.googleapis.com" => tls_session::get_root_cert_google_g1().to_vec(),
-        "kauth.kakao.com" => tls_session::get_root_cert_kakao().to_vec(),
-        _ => tls_session::get_root_cert_facebook_2().to_vec(),
-    };
+    let mut issuer_decoded: Vec<u8> = hex::decode(p.issuer_decoded).unwrap();
+    data.push(issuer_decoded.len() as u8);
+    data.append(&mut issuer_decoded);
 
-    let mut len_of_root_cert = format::u16_to_bytes(root_cert.len() as u16).to_vec();
-    println!("len_of_root_cert is : {:?}", len_of_root_cert);
+    let mut kid = p.kid;
+    println!("kid is : {:?}", kid);
     data.push(kid.len() as u8);
     data.append(&mut kid);
+
+    let mut root_cert = p.root_cert;
+    let mut len_of_root_cert = format::u16_to_bytes(root_cert.len() as u16).to_vec();
+    println!("len_of_root_cert is : {:?}", len_of_root_cert);
     data.append(&mut len_of_root_cert);
     data.append(&mut root_cert);
 
