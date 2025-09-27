@@ -18,7 +18,7 @@ fn append_uint32(b: &mut Vec<u8>, v: u32) {
     b.push(v as u8);
 }
 
-struct ProviderData <'a> {
+struct ProviderData<'a> {
     domain: &'a str,
     jwk_get_request: &'a str,
     issuer: &'a str,
@@ -28,7 +28,7 @@ struct ProviderData <'a> {
     root_cert: Vec<u8>,
 }
 
-impl ProviderData <'_> {
+impl ProviderData<'_> {
     pub fn getGoogle() -> Self {
         //https://www.googleapis.com/oauth2/v3/certs
         //let domain = "www.googleapis.com";
@@ -40,7 +40,7 @@ impl ProviderData <'_> {
             domain: "www.googleapis.com",
             jwk_get_request: "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ",
             issuer: "yJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLC",
-            issuer_decoded: "06676f6f676c65",//"794a7063334d694f694a6f64485277637a6f764c32466a59323931626e527a4c6d6476623264735a53356a623230694c43", // "https://accounts.google.com",
+            issuer_decoded: "06676f6f676c65", //"794a7063334d694f694a6f64485277637a6f764c32466a59323931626e527a4c6d6476623264735a53356a623230694c43", // "https://accounts.google.com",
             index_mod_4: 1,
             kid: google_kid,
             root_cert: google_root_cert,
@@ -56,8 +56,8 @@ impl ProviderData <'_> {
         ProviderData {
             domain: "kauth.kakao.com",
             jwk_get_request: "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ",
-            issuer: "ImlzcyI6Imh0dHBzOi8va2F1dGgua2FrYW8uY29tIiw", // 
-            issuer_decoded: "056b616b616f",//"496d6c7a63794936496d68306448427a4f6938766132463164476775613246725957387559323974496977", //"https://kauth.kakao.com",
+            issuer: "ImlzcyI6Imh0dHBzOi8va2F1dGgua2FrYW8uY29tIiw", //
+            issuer_decoded: "056b616b616f", //"496d6c7a63794936496d68306448427a4f6938766132463164476775613246725957387559323974496977", //"https://kauth.kakao.com",
             index_mod_4: 0,
             kid: kakao_kid,
             root_cert: kakao_root_cert,
@@ -68,13 +68,14 @@ impl ProviderData <'_> {
         // https://www.facebook.com/.well-known/oauth/openid/jwks/
         // let domain = "www.facebook.com";
         // let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
-        let facebook_kid: Vec<u8> = hex::decode("996af12848fc796cb61a6ab287e4b01dbd78a82f").unwrap();
+        let facebook_kid: Vec<u8> =
+            hex::decode("996af12848fc796cb61a6ab287e4b01dbd78a82f").unwrap();
         let facebook_root_cert: Vec<u8> = tls_session::get_root_cert_facebook_2().to_vec();
         ProviderData {
             domain: "www.facebook.com",
             jwk_get_request: "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ",
-            issuer: "yJpc3MiOiJodHRwczpcL1wvd3d3LmZhY2Vib29rLmNvbSIs", // 
-            issuer_decoded: "0866616365626f6f6b",//"794a7063334d694f694a6f64485277637a70634c317776643364334c6d5a6859325669623239724c6d4e7662534973", // "https://www.facebook.com",
+            issuer: "yJpc3MiOiJodHRwczpcL1wvd3d3LmZhY2Vib29rLmNvbSIs", //
+            issuer_decoded: "0866616365626f6f6b", //"794a7063334d694f694a6f64485277637a70634c317776643364334c6d5a6859325669623239724c6d4e7662534973", // "https://www.facebook.com",
             index_mod_4: 1,
             kid: facebook_kid,
             root_cert: facebook_root_cert,
@@ -111,7 +112,7 @@ fn main_test() {
     let mut data: Vec<u8> = Vec::new();
     append_uint32(&mut data, current_timestamp);
     println!("tls_session_bytes is : {:?}", tls_session_bytes);
-    
+
     let mut issuer_decoded: Vec<u8> = hex::decode(p.issuer_decoded).unwrap();
     data.push(issuer_decoded.len() as u8);
     data.append(&mut issuer_decoded);

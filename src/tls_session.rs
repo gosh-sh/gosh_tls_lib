@@ -722,7 +722,8 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     let start_cert = start_kid_pos + 1 + len_of_kid; // let start_cert = 5 + len_of_kid;
     let certificate_len = (256 * raw[start_cert] as u16 + raw[start_cert + 1] as u16) as usize; // let certificate_len = (256*raw[24] as u16 + raw[25] as u16) as usize;
 
-    if certificate_len < 500 { // for example 525 is valid ECDSA cert
+    if certificate_len < 500 {
+        // for example 525 is valid ECDSA cert
         return vec![0u8, 3u8, 36u8]; // "insufficient len of external certificate" : 0x3, 0x21 = 801
     }
 
@@ -741,7 +742,7 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     // check len of data
 
     //if data.len() < 5000 {
-        //return vec![0u8, 3u8, 37u8]; // "insufficient len" : 0x3, 0x21 = 801
+    //return vec![0u8, 3u8, 37u8]; // "insufficient len" : 0x3, 0x21 = 801
     //}
     let client_hello_len = data[38] as usize;
 
@@ -750,7 +751,7 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     }
 
     let client_hello: &[u8] = &data[34..39 + client_hello_len]; //let client_hello:[u8;166] = data[34..200].try_into().unwrap(); // len is 166 bytes
-    
+
     if client_hello[0] != 0x16 {
         return vec![0u8, 3u8, 39u8]; // "client hello not found"
     }
@@ -763,7 +764,7 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     let enc_ser_handshake_len =
         256 * data[server_hello_start + 98] as u16 + data[server_hello_start + 99] as u16; // let enc_ser_handshake_len = 256*data[298] as u16 + data[299] as u16;
     //println!("enc_ser_handshake_len: {:?}", enc_ser_handshake_len);
-    if enc_ser_handshake_len<2500 {
+    if enc_ser_handshake_len < 2500 {
         return vec![0u8, 3u8, 41u8]; // "server handshake len not sufficient"
     }
     let handshake_end_index = server_hello_start + 95 + 5 + enc_ser_handshake_len as usize; // let handshake_end_index = 295 + 5 + enc_ser_handshake_len as usize;
@@ -780,16 +781,17 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     let mut encr_ticket_len = 256 * data[handshake_end_index + app_request_len + 3] as usize
         + data[handshake_end_index + app_request_len + 4] as usize
         + 5;
-    let next_packet_len = 256 * data[handshake_end_index + app_request_len + encr_ticket_len + 3] as usize 
+    let next_packet_len = 256
+        * data[handshake_end_index + app_request_len + encr_ticket_len + 3] as usize
         + data[handshake_end_index + app_request_len + encr_ticket_len + 4] as usize
         + 5;
-    
+
     /*if encr_ticket_len == 241 {
         // if encr_ticket_len < 300 {
         encr_ticket_len = encr_ticket_len * 2;
         records_received = 2;
     }*/
-    if next_packet_len==encr_ticket_len {
+    if next_packet_len == encr_ticket_len {
         encr_ticket_len += next_packet_len; // double encrypted session ticket
         records_received = 2;
     }
@@ -798,7 +800,7 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         ..handshake_end_index + app_request_len + encr_ticket_len]; // let encrypted_ticket: &[u8] = &data[handshake_end_index + app_request_len..handshake_end_index + app_request_len +540];// let encrypted_ticket:[u8;540] = data[handshake_end_index+100..handshake_end_index+100+540].try_into().unwrap(); // len of ticket is 524
 
     //if ... {
-        //return vec![0u8, 3u8, 42u8]; // some trouble with encrypted session ticket
+    //return vec![0u8, 3u8, 42u8]; // some trouble with encrypted session ticket
     //}
 
     // let http_response:[u8;1601] =
@@ -888,7 +890,8 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         + (certs_chain[1] as usize) * 256
         + (certs_chain[2] as usize);
 
-    if certs_chain_len < 1000 { // minimal chain is two ecdsa certs each of them approx 500 bytes len
+    if certs_chain_len < 1000 {
+        // minimal chain is two ecdsa certs each of them approx 500 bytes len
         return vec![0u8, 3u8, 70u8]; // "certs_chain_len is not sufficiet"
     }
 
@@ -941,14 +944,15 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         SHA384WITH_RSAPSS => sha512::sum384(&check_sum_extend).to_vec(),
         SHA384WITH_RSA => sha512::sum384(&check_sum_extend).to_vec(),
         SHA384WITH_RSAE => sha512::sum384(&check_sum_extend).to_vec(),
-		ECDSA_WITH_SHA512 => sha512::sum512(&check_sum_extend).to_vec(),
+        ECDSA_WITH_SHA512 => sha512::sum512(&check_sum_extend).to_vec(),
         SHA512WITH_RSA => sha512::sum512(&check_sum_extend).to_vec(),
         SHA512WITH_RSAE => sha512::sum512(&check_sum_extend).to_vec(),
         SHA512WITH_RSAPSS => sha512::sum512(&check_sum_extend).to_vec(),
         _ => return vec![0u8, 3u8, 73u8], // "not supported (not sha256, sha384 or sha512) type of signature"
     };
 
-    if let Err(e) = check_certs_with_fixed_root( // if !check_certs_with_fixed_root(
+    if let Err(e) = check_certs_with_fixed_root(
+        // if !check_certs_with_fixed_root(
         timestamp,
         &provider,
         &check_prepared,

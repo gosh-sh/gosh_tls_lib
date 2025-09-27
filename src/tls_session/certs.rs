@@ -3479,12 +3479,19 @@ pub fn check_certs_with_fixed_root(
     certs_chain: &[u8],
     signature: &[u8],
     root_cert_bytes: &[u8],
-) -> Result<(), Vec<u8> > { // ) -> bool {
+) -> Result<(), Vec<u8>> {
+    // ) -> bool {
     //
-    let check_certs_result =
-        check_certs_wasm(current_time, provider, check_sum, certs_chain, signature, root_cert_bytes);
+    let check_certs_result = check_certs_wasm(
+        current_time,
+        provider,
+        check_sum,
+        certs_chain,
+        signature,
+        root_cert_bytes,
+    );
     //if check_certs_result.is_none() {
-        //return Err(vec![0u8, 3u8, 180u8]); // "invalid certs chain" // return false;
+    //return Err(vec![0u8, 3u8, 180u8]); // "invalid certs chain" // return false;
     //}
     match check_certs_result {
         Ok(root_public_key) => {
@@ -3492,9 +3499,9 @@ pub fn check_certs_with_fixed_root(
             if proposed_root_cert.public_key == root_public_key {
                 return Ok(()); // return true;
             }
-            return Err(vec![0u8, 3u8, 190u8]);// "root public key does not match with key from proposed root cert" // return false;
+            return Err(vec![0u8, 3u8, 190u8]); // "root public key does not match with key from proposed root cert" // return false;
         }
-        Err(e) => return Err(e)
+        Err(e) => return Err(e),
     }
 }
 
@@ -3568,7 +3575,8 @@ pub fn check_certs_wasm(
     certs_chain: &[u8],
     signature: &[u8],
     spare_root_cert: &[u8],
-) -> Result<PublicKey, Vec<u8> > { // -> Option<PublicKey> {
+) -> Result<PublicKey, Vec<u8>> {
+    // -> Option<PublicKey> {
     // extract
     // divide input string into three slices
 
@@ -3664,46 +3672,50 @@ pub fn check_certs_wasm(
 
     if !internal_cert.check_signature_from(&root_cert) {
         // return None;
-        return Err(vec![0u8, 3u8, 82u8]);//panic!("internal_cert.check_signature_from(&root_cert)");
+        return Err(vec![0u8, 3u8, 82u8]); //panic!("internal_cert.check_signature_from(&root_cert)");
     }
 
-    println!("internal_cert.subject.common_name: {:?}", internal_cert.subject.common_name);// "WR2"(for Google), "DigiCert Global G2 TLS RSA SHA256 2020 CA1" (for facebook), "Thawte TLS RSA CA G1" (for kakao)
+    println!("internal_cert.subject.common_name: {:?}", internal_cert.subject.common_name); // "WR2"(for Google), "DigiCert Global G2 TLS RSA SHA256 2020 CA1" (for facebook), "Thawte TLS RSA CA G1" (for kakao)
 
     println!("leaf_cert.issuer: {:?}", leaf_cert.issuer.organization[0]);
-    if leaf_cert.issuer.organization[0] != "DigiCert Inc" && leaf_cert.issuer.organization[0] != "Google Trust Services" {
+    if leaf_cert.issuer.organization[0] != "DigiCert Inc"
+        && leaf_cert.issuer.organization[0] != "Google Trust Services"
+    {
         return Err(vec![0u8, 3u8, 83u8]); // "untrusted leaf cert issuer"
     }
 
     println!("leaf_cert.subject.common_name: {:?}", leaf_cert.subject.common_name);
-    println!("provider: {:?}", provider);// "*.facebook.com", "*.kakao.com", "upload.video.google.com"
+    println!("provider: {:?}", provider); // "*.facebook.com", "*.kakao.com", "upload.video.google.com"
     //println!("leaf_cert.subject.value: {:?}", leaf_cert.subject.names[]);
     match leaf_cert.subject.common_name.as_str() {
         "upload.video.google.com" => {
-            if internal_cert.subject.common_name!="WR2" && internal_cert.subject.common_name!="WE2" {
+            if internal_cert.subject.common_name != "WR2"
+                && internal_cert.subject.common_name != "WE2"
+            {
                 return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
             }
 
-            if provider!=vec![6, 103, 111, 111, 103, 108, 101] {
+            if provider != vec![6, 103, 111, 111, 103, 108, 101] {
                 return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
             }
-        },
+        }
         "*.kakao.com" => {
-            if internal_cert.subject.common_name!="Thawte TLS RSA CA G1" {
+            if internal_cert.subject.common_name != "Thawte TLS RSA CA G1" {
                 return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
             }
-            if provider!=vec![5, 107, 97, 107, 97, 111] {
+            if provider != vec![5, 107, 97, 107, 97, 111] {
                 return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
             }
-        },
+        }
         "*.facebook.com" => {
-            if internal_cert.subject.common_name!="DigiCert Global G2 TLS RSA SHA256 2020 CA1" {
+            if internal_cert.subject.common_name != "DigiCert Global G2 TLS RSA SHA256 2020 CA1" {
                 return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
             }
-            if provider!=vec![8, 102, 97, 99, 101, 98, 111, 111, 107] {
+            if provider != vec![8, 102, 97, 99, 101, 98, 111, 111, 107] {
                 return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
             }
-        },
-        _ => return Err(vec![0u8, 3u8, 85u8]) // "incorrect leaf_cert.subject.common_name"
+        }
+        _ => return Err(vec![0u8, 3u8, 85u8]), // "incorrect leaf_cert.subject.common_name"
     }
 
     match leaf_cert.public_key_algorithm.to_string() {
@@ -3751,7 +3763,7 @@ pub fn check_certs_wasm(
         _ => return Err(vec![0u8, 3u8, 90u8]), //panic!("Unknown signature algorithm"),
     }
 
-    return Ok(root_cert.public_key);//Some(root_cert.public_key);
+    return Ok(root_cert.public_key); //Some(root_cert.public_key);
 }
 
 #[cfg(test)]
