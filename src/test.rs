@@ -29,7 +29,7 @@ struct ProviderData<'a> {
 }
 
 impl ProviderData<'_> {
-    pub fn getGoogle() -> Self {
+    pub fn get_google() -> Self {
         //https://www.googleapis.com/oauth2/v3/certs
         //let domain = "www.googleapis.com";
         //let jwk_get_request = "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ";
@@ -40,14 +40,14 @@ impl ProviderData<'_> {
             domain: "www.googleapis.com",
             jwk_get_request: "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ",
             issuer: "yJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLC",
-            issuer_decoded: "06676f6f676c65", //"794a7063334d694f694a6f64485277637a6f764c32466a59323931626e527a4c6d6476623264735a53356a623230694c43", // "https://accounts.google.com",
+            issuer_decoded: "676f6f676c65", //"794a7063334d694f694a6f64485277637a6f764c32466a59323931626e527a4c6d6476623264735a53356a623230694c43", // "https://accounts.google.com",
             index_mod_4: 1,
             kid: google_kid,
             root_cert: google_root_cert,
         }
     }
 
-    pub fn getKakao() -> Self {
+    pub fn get_kakao() -> Self {
         //https://kauth.kakao.com/.well-known/jwks.json
         //let domain = "kauth.kakao.com";
         //let jwk_get_request =  "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ";
@@ -57,14 +57,14 @@ impl ProviderData<'_> {
             domain: "kauth.kakao.com",
             jwk_get_request: "GET /.well-known/jwks.json HTTP/1.1\r\nHost: ",
             issuer: "ImlzcyI6Imh0dHBzOi8va2F1dGgua2FrYW8uY29tIiw", //
-            issuer_decoded: "056b616b616f", //"496d6c7a63794936496d68306448427a4f6938766132463164476775613246725957387559323974496977", //"https://kauth.kakao.com",
+            issuer_decoded: "6b616b616f", //"496d6c7a63794936496d68306448427a4f6938766132463164476775613246725957387559323974496977", //"https://kauth.kakao.com",
             index_mod_4: 0,
             kid: kakao_kid,
             root_cert: kakao_root_cert,
         }
     }
 
-    pub fn getFacebook() -> Self {
+    pub fn get_facebook() -> Self {
         // https://www.facebook.com/.well-known/oauth/openid/jwks/
         // let domain = "www.facebook.com";
         // let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
@@ -75,7 +75,7 @@ impl ProviderData<'_> {
             domain: "www.facebook.com",
             jwk_get_request: "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ",
             issuer: "yJpc3MiOiJodHRwczpcL1wvd3d3LmZhY2Vib29rLmNvbSIs", //
-            issuer_decoded: "0866616365626f6f6b", //"794a7063334d694f694a6f64485277637a70634c317776643364334c6d5a6859325669623239724c6d4e7662534973", // "https://www.facebook.com",
+            issuer_decoded: "66616365626f6f6b", //"794a7063334d694f694a6f64485277637a70634c317776643364334c6d5a6859325669623239724c6d4e7662534973", // "https://www.facebook.com",
             index_mod_4: 1,
             kid: facebook_kid,
             root_cert: facebook_root_cert,
@@ -85,9 +85,9 @@ impl ProviderData<'_> {
 
 #[test]
 fn main_test() {
-    let p = ProviderData::getGoogle();
-    //let p = ProviderData::getKakao();
-    //let p = ProviderData::getFacebook();
+    //let p = ProviderData::get_google();
+    let p = ProviderData::get_kakao();
+    //let p = ProviderData::get_facebook();
     let tls_session = get_jwk_tls_data(&p.domain, &p.jwk_get_request).unwrap();
 
     println!("TLS session data in hex: {:?}", tls_session.1);
