@@ -33,9 +33,9 @@ impl ProviderData<'_> {
         //https://www.googleapis.com/oauth2/v3/certs
         //let domain = "www.googleapis.com";
         //let jwk_get_request = "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ";
-        let google_kid: Vec<u8> = hex::decode("927b8fb67bbad77445e5fea4c71aa9846d7ddd01").unwrap();
-        let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g4().to_vec();
-        //let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g1().to_vec();
+        let google_kid: Vec<u8> = hex::decode("c8ab71530972bba20b49f78a09c9852c43ff9118").unwrap();
+        //let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g4().to_vec();
+        let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g1().to_vec();
         ProviderData {
             domain: "www.googleapis.com",
             jwk_get_request: "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ",
@@ -69,7 +69,7 @@ impl ProviderData<'_> {
         // let domain = "www.facebook.com";
         // let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
         let facebook_kid: Vec<u8> =
-            hex::decode("996af12848fc796cb61a6ab287e4b01dbd78a82f").unwrap();
+            hex::decode("e4f6715b789895089f5c26d53b01a2991ed2772b").unwrap();
         let facebook_root_cert: Vec<u8> = tls_session::get_root_cert_facebook_2().to_vec();
         ProviderData {
             domain: "www.facebook.com",
@@ -86,13 +86,15 @@ impl ProviderData<'_> {
 #[test]
 fn main_test() {
     //let p = ProviderData::get_google();
-    let p = ProviderData::get_kakao();
-    //let p = ProviderData::get_facebook();
+    //let p = ProviderData::get_kakao();
+    let p = ProviderData::get_facebook();
     let tls_session = get_jwk_tls_data(&p.domain, &p.jwk_get_request).unwrap();
 
     println!("TLS session data in hex: {:?}", tls_session.1);
     println!("root cert serial number: {:?}", tls_session.0);
     println!("root certs map: {:?}", get_root_certs_map(&p.domain).unwrap());
+
+    let tls_session_hex_ = tls_session.clone().1;
 
     let tls_session_hex = tls_session.1;
     let mut tls_session_bytes = hex::decode(tls_session_hex.clone()).unwrap();
@@ -136,4 +138,6 @@ fn main_test() {
 
     println!("jwk public_key_data is : {:?}", public_key_data);
     println!("jwk public_key_data hex is : {:?}", hex::encode(public_key_data));
+
+    println!("tls_session_hex: {:?}", tls_session_hex_);
 }
