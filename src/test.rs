@@ -84,10 +84,16 @@ impl ProviderData<'_> {
 }
 
 #[test]
+fn main_test_certs() {
+    let domain = "jwt-tester.mystenlabs.com";
+    println!("root certs map: {:?}", get_root_certs_map(domain).unwrap());
+}
+
+#[test]
 fn main_test() {
-    //let p = ProviderData::get_google();
+    let p = ProviderData::get_google();
     //let p = ProviderData::get_kakao();
-    let p = ProviderData::get_facebook();
+    //let p = ProviderData::get_facebook();
     let tls_session = get_jwk_tls_data(&p.domain, &p.jwk_get_request).unwrap();
 
     println!("TLS session data in hex: {:?}", tls_session.1);

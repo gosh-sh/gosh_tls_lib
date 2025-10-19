@@ -105,6 +105,15 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
             }
             return Ok(map);
         }
+        "jwt-tester.mystenlabs.com" => {
+            for root_cert_hex in certs::LV_TEST_ISSUER_ROOTS_CERTS{
+                let root_cert =
+                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]);
+                let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
+                map.insert(root_cert_sn, root_cert_hex.to_string());
+            }
+            return Ok(map);
+        }
         _ => {
             return Err("Invalid domain".to_string());
         }
