@@ -114,6 +114,15 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
             }
             return Ok(map);
         }
+        "oauth.gosh.sh" => {
+            for root_cert_hex in certs::LV_GOOGLE_ROOTS_CERTS {
+                let root_cert =
+                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]);
+                let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
+                map.insert(root_cert_sn, root_cert_hex.to_string());
+            }
+            return Ok(map);
+        }
         _ => {
             return Err("Invalid domain".to_string());
         }
@@ -596,20 +605,40 @@ impl Session {
     }
 
     pub fn receive_http_response(&mut self) -> Vec<u8> {
-        //
         let mut response = Vec::new();
 
         loop {
             println!("receive a portion!");
             let mut pt = self.receive_http_data();
-            pt = format::trunc_end_with_trailer(&pt, 23u8); // trunc zeroes with 23
-            println!("pt is : {:?}", pt);
-            response.extend_from_slice(&pt[..pt.len()]); // response.extend_from_slice(&pt[..pt.len()-1]);
-            //response.push(23);
+            println!("pt raw is : {:?}", pt);
 
-            // Check whether the end of the response matches the desired sequence
-            if pt.len() >= 5 && &pt[pt.len() - 4..] == &[0x0D, 0x0A, 0x0D, 0x0A] {
-                // if pt.len() >= 5 && &pt[pt.len() - 5..] == &[0x0D, 0x0A, 0x0D, 0x0A, 0x17] {
+            if pt.is_empty() {
+                println!("empty plaintext, stop");
+                break;
+            }
+
+            // TLS alert close_notify
+            if pt.len() >= 3
+                && pt[pt.len() - 3] == 1
+                && pt[pt.len() - 2] == 0
+                && pt[pt.len() - 1] == 21
+            {
+                println!("got TLS close_notify, stop reading HTTP");
+                break;
+            }
+
+            pt = format::trunc_end_with_trailer(&pt, 23u8);
+            println!("pt after trunc is : {:?}", pt);
+
+            if pt.is_empty() {
+                println!("pt is empty after trunc, stop");
+                break;
+            }
+
+            response.extend_from_slice(&pt);
+
+            if response.len() >= 4 && &response[response.len() - 4..] == b"\r\n\r\n" {
+                println!("found \\r\\n\\r\\n, stop");
                 break;
             }
         }

@@ -81,6 +81,22 @@ impl ProviderData<'_> {
             root_cert: facebook_root_cert,
         }
     }
+
+    pub fn get_gosh() -> Self {
+        // https://oauth.gosh.sh/v1/certs
+        let gosh_kid: Vec<u8> = hex::decode("ff8eed04282f1dbd89f5a79b787d67bc87620597").unwrap();
+        let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g4().to_vec();
+
+        ProviderData {
+            domain: "oauth.gosh.sh",
+            jwk_get_request: "GET /v1/certs HTTP/1.1\r\nHost: ",
+            issuer: "yJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLC",
+            issuer_decoded: "676f6f676c65",
+            index_mod_4: 1,
+            kid: gosh_kid,
+            root_cert: google_root_cert,
+        }
+    }
 }
 
 #[test]
@@ -91,7 +107,7 @@ fn main_test_certs() {
 
 #[test]
 fn main_test() {
-    let p = ProviderData::get_google();
+    let p = ProviderData::get_gosh();
     //let p = ProviderData::get_kakao();
     //let p = ProviderData::get_facebook();
     let tls_session = get_jwk_tls_data(&p.domain, &p.jwk_get_request).unwrap();

@@ -19,7 +19,7 @@ pub fn get_jwk_tls_data(domain: &str, get_request: &str) -> Result<(String, Stri
     session.send_data(req.as_bytes());
     println!("SendData done");
 
-    let _ticket = session.receive_data();
+    // let _ticket = session.receive_data();
     //println!("ticket is : {:?}", ticket);
     println!("ReceiveData done");
     let _resp = session.receive_http_response(); // let resp = session.receive_http_response().expect("Failed to receive HTTP response")
