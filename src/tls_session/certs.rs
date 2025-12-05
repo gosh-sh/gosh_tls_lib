@@ -2023,7 +2023,7 @@ fn process_extensions(out: &mut Certificate) -> bool {
     return true;
 }
 
-pub fn parse_certificate(der: &[u8]) -> Certificate {
+pub fn parse_certificate(der: &[u8]) -> Result<Certificate, Vec<u8>> {
     // fn parse_certificate(der: &[u8]) -> Result<Certificate, Box<dyn Error>> {
     let mut cert = Certificate {
         raw: Vec::new(),
@@ -2082,20 +2082,20 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
 
     if !input.read_asn1_element(&mut input1, SEQUENCE) {
         //return Err("x509: malformed certificate".into());
-        panic!("x509: malformed certificate");
+        return Err(vec![0u8, 21u8, 1u8]);//panic!("x509: malformed certificate");
     }
     cert.raw = input1.0.clone();
 
     if !input1.read_asn1(&mut input, SEQUENCE) {
         //return Err("x509: malformed certificate".into());
-        panic!("x509: malformed certificate");
+        return Err(vec![0u8, 21u8, 1u8]);//panic!("x509: malformed certificate");
     }
 
     let mut tbs = ASN1String { 0: Vec::new() }; // Suitable type for tbs
 
     if !input.read_asn1_element(&mut tbs, SEQUENCE) {
         //return Err("x509: malformed tbs certificate".into());
-        panic!("x509: malformed tbs certificate");
+        return Err(vec![0u8, 21u8, 2u8]);// panic!("x509: malformed tbs certificate");
     }
 
     cert.raw_tbs_certificate = tbs.0.clone();
@@ -2103,35 +2103,35 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
     let mut tbs1 = tbs.clone();
     if !tbs.read_asn1(&mut tbs1, SEQUENCE) {
         //return Err("x509: malformed version".into());
-        panic!("x509: malformed tbs certificate");
+        return Err(vec![0u8, 21u8, 2u8]);// panic!("x509: malformed tbs certificate");
     }
 
     // if !tbs1.read_optional_asn1_integer(&mut cert.version, Tag(0).constructed().context_specific(), 0) {
     if !tbs1.read_optional_asn1_integer(&mut cert.version, context_specific(constructed(0u8)), 0) {
         //return Err("x509: malformed version".into());
-        panic!("x509: malformed tbs certificate");
+        return Err(vec![0u8, 21u8, 2u8]);// panic!("x509: malformed tbs certificate");
     }
 
     if cert.version < 0 {
         //return Err("x509: malformed version".into());
-        panic!("x509: malformed version");
+        return Err(vec![0u8, 21u8, 3u8]);// panic!("x509: malformed version");
     }
 
     cert.version += 1;
     if cert.version > 3 {
         //return Err("x509: invalid version".into());
-        panic!("x509: invalid version");
+        return Err(vec![0u8, 21u8, 4u8]);// panic!("x509: invalid version");
     }
 
     match tbs1.read_asn1_big_int() {
         Some(serial) => cert.serial_number = serial,
-        None => panic!("x509: malformed serial number"),
+        None => return Err(vec![0u8, 21u8, 5u8]), //panic!("x509: malformed serial number"),
     }
 
     let mut sig_ai_seq = ASN1String { 0: Vec::new() };
     if !tbs1.read_asn1(&mut sig_ai_seq, SEQUENCE) {
         //return Err("x509: malformed signature algorithm identifier".into());
-        panic!("x509: malformed signature algorithm identifier");
+        return Err(vec![0u8, 21u8, 6u8]);// panic!("x509: malformed signature algorithm identifier");
     }
 
     // Before parsing the inner algorithm identifier, extract
@@ -2140,13 +2140,13 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
     let mut outer_sig_ai_seq = ASN1String { 0: Vec::new() };
     if !input.read_asn1(&mut outer_sig_ai_seq, SEQUENCE) {
         //return Err("x509: malformed algorithm identifier".into());
-        panic!("x509: malformed algorithm identifier");
+        return Err(vec![0u8, 21u8, 7u8]);// panic!("x509: malformed algorithm identifier");
     }
 
     if outer_sig_ai_seq.0 != sig_ai_seq.0 {
         // if outer_sig_ai_seq != sig_ai_seq {
         //return Err("x509: inner and outer signature algorithm identifiers don't match".into());
-        panic!("x509: inner and outer signature algorithm identifiers don't match");
+        return Err(vec![0u8, 21u8, 8u8]);// panic!("x509: inner and outer signature algorithm identifiers don't match");
     }
 
     let sig_ai = parse_ai(&mut sig_ai_seq);
@@ -2155,7 +2155,7 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
     let mut issuer_seq = ASN1String { 0: Vec::new() };
     if !tbs1.read_asn1_element(&mut issuer_seq, SEQUENCE) {
         //return Err("x509: malformed issuer".into());
-        panic!("x509: malformed issuer");
+        return Err(vec![0u8, 21u8, 9u8]); // panic!("x509: malformed issuer");
     }
     cert.raw_issuer = issuer_seq.0.clone();
     let issuer_rdns = parse_name(&mut issuer_seq);
@@ -2163,14 +2163,14 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
 
     let mut validity = ASN1String { 0: Vec::new() };
     if !tbs1.read_asn1(&mut validity, SEQUENCE) {
-        panic!("x509: malformed validity");
+        return Err(vec![0u8, 21u8, 10u8]); // panic!("x509: malformed validity");
     }
 
     (cert.not_before, cert.not_after) = parse_validity(&mut validity).unwrap();
 
     let mut subject_seq = ASN1String { 0: Vec::new() };
     if !tbs1.read_asn1_element(&mut subject_seq, SEQUENCE) {
-        panic!("x509: malformed issuer");
+        return Err(vec![0u8, 21u8, 9u8]); // panic!("x509: malformed issuer");
     }
     cert.raw_subject = subject_seq.0.clone();
     let subject_rdns = parse_name(&mut subject_seq);
@@ -2179,16 +2179,16 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
 
     let mut spki = ASN1String { 0: Vec::new() };
     if !tbs1.read_asn1_element(&mut spki, SEQUENCE) {
-        panic!("x509: malformed spki");
+        return Err(vec![0u8, 21u8, 10u8]); // panic!("x509: malformed spki");
     }
     cert.raw_subject_public_key_info = spki.0.clone();
     let mut spki1 = ASN1String { 0: Vec::new() };
     if !spki.read_asn1(&mut spki1, SEQUENCE) {
-        panic!("x509: malformed spki"); //return nil, errors.New("x509: malformed spki")
+        return Err(vec![0u8, 21u8, 10u8]); // panic!("x509: malformed spki"); //return nil, errors.New("x509: malformed spki")
     }
     let mut pk_ai_seq = ASN1String { 0: Vec::new() };
     if !spki1.read_asn1(&mut pk_ai_seq, SEQUENCE) {
-        panic!("x509: malformed public key algorithm identifier");
+        return Err(vec![0u8, 21u8, 11u8]); // panic!("x509: malformed public key algorithm identifier");
     }
 
     let pk_ai = parse_ai(&mut pk_ai_seq); //pkAI, err := parseAI(pkAISeq)
@@ -2198,7 +2198,7 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
     cert.public_key_algorithm = get_public_key_algorithm_from_oid(&pk_ai.algorithm);
     let mut spk = BitString { bytes: Vec::new(), bit_length: 0 }; //var spk asn1.BitString
     if !spki1.read_asn1_bitstring(&mut spk) {
-        panic!("x509: malformed subjectPublicKey");
+        return Err(vec![0u8, 21u8, 11u8]); //panic!("x509: malformed subjectPublicKey");
     }
     if cert.public_key_algorithm != PublicKeyAlgorithm::UnknownPublicKeyAlgorithm {
         let public_key_info = PublicKeyInfo { raw: Vec::new(), algorithm: pk_ai, public_key: spk };
@@ -2214,10 +2214,10 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
 
     if cert.version > 1 {
         if !tbs1.skip_optional_asn1(context_specific(1u8)) {
-            panic!("x509: malformed issuerUniqueID");
+            return Err(vec![0u8, 21u8, 12u8]);// panic!("x509: malformed issuerUniqueID");
         }
         if !tbs1.skip_optional_asn1(context_specific(2u8)) {
-            panic!("x509: malformed subjectUniqueID");
+            return Err(vec![0u8, 21u8, 13u8]); // panic!("x509: malformed subjectUniqueID");
         }
 
         if cert.version == 3 {
@@ -2228,20 +2228,20 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
                 &mut present,
                 context_specific(constructed(3u8)),
             ) {
-                panic!("x509: malformed extensions");
+                return Err(vec![0u8, 21u8, 14u8]);//panic!("x509: malformed extensions");
             }
 
             if present {
                 let mut seen_exts: HashMap<String, bool> = HashMap::new(); // seenExts := make(map[string]bool)
                 let mut extensions1 = ASN1String { 0: Vec::new() };
                 if !extensions.read_asn1(&mut extensions1, SEQUENCE) {
-                    panic!("x509: malformed extensions");
+                    return Err(vec![0u8, 21u8, 14u8]);// panic!("x509: malformed extensions");
                 }
 
                 while !extensions1.0.is_empty() {
                     let mut extension = ASN1String { 0: Vec::new() };
                     if !extensions1.read_asn1(&mut extension, SEQUENCE) {
-                        panic!("x509: malformed extension");
+                        return Err(vec![0u8, 21u8, 14u8]);// panic!("x509: malformed extension");
                     }
                     let ext = parse_extension(&mut extension); //ext, err := parseExtension(extension)
                     //if err != nil {
@@ -2250,7 +2250,7 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
 
                     let oid_str = to_oid_string(&ext.id); //oidStr := ext.Id.String()
                     if !seen_exts.get(&oid_str).is_none() {
-                        panic!("x509: certificate contains duplicate extensions");
+                        return Err(vec![0u8, 21u8, 15u8]); // panic!("x509: certificate contains duplicate extensions");
                     }
                     //if seenExts[oidStr] {
                     //return nil, errors.New("x509: certificate contains duplicate extensions")
@@ -2260,7 +2260,7 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
                 }
 
                 if !process_extensions(&mut cert) {
-                    panic!("x509: malformed with certificate extensions");
+                    return Err(vec![0u8, 21u8, 16u8]); // panic!("x509: malformed with certificate extensions");
                 }
             }
         }
@@ -2268,11 +2268,11 @@ pub fn parse_certificate(der: &[u8]) -> Certificate {
 
     let mut signature = BitString { bytes: vec![], bit_length: 0 };
     if !input.read_asn1_bitstring(&mut signature) {
-        panic!("x509: malformed signature");
+        return Err(vec![0u8, 21u8, 17u8]); // panic!("x509: malformed signature");
     }
     cert.signature = signature.right_align();
 
-    cert
+    Ok(cert)
 }
 
 fn to_oid_string(data: &Vec<i32>) -> String {
@@ -3345,7 +3345,7 @@ pub fn check_certs(
 
     let leaf_cert_slice = &certs_chain[6..len_of_leaf_cert + 6];
 
-    let mut leaf_cert = parse_certificate(leaf_cert_slice); // leafCert, err := x509.ParseCertificate(leafCertSlice)
+    let mut leaf_cert = parse_certificate(leaf_cert_slice).unwrap(); // leafCert, err := x509.ParseCertificate(leafCertSlice)
 
     if leaf_cert.not_after.timestamp() < current_time
         || leaf_cert.not_before.timestamp() > current_time
@@ -3360,7 +3360,7 @@ pub fn check_certs(
 
     let internal_cert_slice = &certs_chain[start_index + 3..start_index + len_of_internal_cert + 3];
 
-    let mut internal_cert = parse_certificate(internal_cert_slice); // internalCert, err := x509.ParseCertificate(internalCertSlice)
+    let mut internal_cert = parse_certificate(internal_cert_slice).unwrap(); // internalCert, err := x509.ParseCertificate(internalCertSlice)
 
     if internal_cert.not_after.timestamp() < current_time
         || internal_cert.not_before.timestamp() > current_time
@@ -3376,9 +3376,9 @@ pub fn check_certs(
             + (certs_chain[start_index + 2] as usize);
         let root_cert_slice = &certs_chain[start_index + 3..start_index + len_of_root_cert + 3];
         //let root_cert = parse_certificate(root_cert_slice);
-        parse_certificate(root_cert_slice)
+        parse_certificate(root_cert_slice).unwrap()
     } else {
-        parse_certificate(&ROOT_FACEBOOK_CERT_2) // parse_certificate(&ROOT_FACEBOOK_CERT)
+        parse_certificate(&ROOT_FACEBOOK_CERT_2).unwrap() // parse_certificate(&ROOT_FACEBOOK_CERT)
     };
 
     if root_cert.not_after.timestamp() < current_time
@@ -3499,7 +3499,7 @@ pub fn check_certs_with_fixed_root(
     //}
     match check_certs_result {
         Ok(root_public_key) => {
-            let proposed_root_cert = parse_certificate(&root_cert_bytes);
+            let proposed_root_cert = parse_certificate(&root_cert_bytes).unwrap();
             if proposed_root_cert.public_key == root_public_key {
                 return Ok(()); // return true;
             }
@@ -3521,13 +3521,13 @@ pub fn check_certs_with_known_roots(
     }
     let root_public_key_from_server = check_certs_result.unwrap();
 
-    let google_cert_g1 = parse_certificate(&ROOT_GOOGLE_CERT_G1);
-    let google_cert_g2 = parse_certificate(&ROOT_GOOGLE_CERT_G2);
-    let google_cert_g3 = parse_certificate(&ROOT_GOOGLE_CERT_G3);
-    let google_cert_g4 = parse_certificate(&ROOT_GOOGLE_CERT_G4);
-    let kakao_cert = parse_certificate(&ROOT_KAKAO_CERT);
-    let facebook_cert_1 = parse_certificate(&ROOT_FACEBOOK_CERT_1);
-    let facebook_cert_2 = parse_certificate(&ROOT_FACEBOOK_CERT_2);
+    let google_cert_g1 = parse_certificate(&ROOT_GOOGLE_CERT_G1).unwrap();
+    let google_cert_g2 = parse_certificate(&ROOT_GOOGLE_CERT_G2).unwrap();
+    let google_cert_g3 = parse_certificate(&ROOT_GOOGLE_CERT_G3).unwrap();
+    let google_cert_g4 = parse_certificate(&ROOT_GOOGLE_CERT_G4).unwrap();
+    let kakao_cert = parse_certificate(&ROOT_KAKAO_CERT).unwrap();
+    let facebook_cert_1 = parse_certificate(&ROOT_FACEBOOK_CERT_1).unwrap();
+    let facebook_cert_2 = parse_certificate(&ROOT_FACEBOOK_CERT_2).unwrap();
 
     let mut result = BigInt::from(0);
     let mut root_check = false;
@@ -3598,7 +3598,7 @@ pub fn check_certs_wasm(
 
     let leaf_cert_slice = &certs_chain[6..len_of_leaf_cert + 6];
 
-    let mut leaf_cert = parse_certificate(leaf_cert_slice); // leafCert, err := x509.ParseCertificate(leafCertSlice)
+    let mut leaf_cert = parse_certificate(leaf_cert_slice).unwrap(); // leafCert, err := x509.ParseCertificate(leafCertSlice)
 
     if leaf_cert.not_after.timestamp() < current_time
         || leaf_cert.not_before.timestamp() > current_time
@@ -3613,7 +3613,7 @@ pub fn check_certs_wasm(
 
     let internal_cert_slice = &certs_chain[start_index + 3..start_index + len_of_internal_cert + 3];
 
-    let mut internal_cert = parse_certificate(internal_cert_slice); // internalCert, err := x509.ParseCertificate(internalCertSlice)
+    let mut internal_cert = parse_certificate(internal_cert_slice).unwrap(); // internalCert, err := x509.ParseCertificate(internalCertSlice)
 
     if internal_cert.not_after.timestamp() < current_time
         || internal_cert.not_before.timestamp() > current_time
@@ -3629,9 +3629,9 @@ pub fn check_certs_wasm(
             + (certs_chain[start_index + 2] as usize);
         let root_cert_slice = &certs_chain[start_index + 3..start_index + len_of_root_cert + 3];
         // let root_cert = parse_certificate(root_cert_slice);
-        parse_certificate(root_cert_slice)
+        parse_certificate(root_cert_slice).unwrap()
     } else {
-        parse_certificate(&spare_root_cert) //parse_certificate(&ROOT_FACEBOOK_CERT)
+        parse_certificate(&spare_root_cert).unwrap() //parse_certificate(&ROOT_FACEBOOK_CERT)
     };
 
     if root_cert.not_after.timestamp() < current_time
@@ -3716,6 +3716,17 @@ pub fn check_certs_wasm(
                 return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
             }
             if provider != vec![102, 97, 99, 101, 98, 111, 111, 107] {
+                return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
+            }
+        }
+        "gosh.sh" => {
+            if internal_cert.subject.common_name != "WR2"
+                && internal_cert.subject.common_name != "WE2"
+            {
+                return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
+            }
+
+            if provider != vec![103, 111, 115, 104] {
                 return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
             }
         }
@@ -3854,7 +3865,7 @@ mod tests {
     //
     #[test]
     fn it_parses_leaf_cert() {
-        let certificate = parse_certificate(&LEAF_CERT_BYTES);
+        let certificate = parse_certificate(&LEAF_CERT_BYTES).unwrap();
 
         println!("the certificate.version is : {:?}", &certificate.version);
         println!("the certificate.serial_number is : {:?}", &certificate.serial_number.to_string());
@@ -4045,7 +4056,7 @@ mod tests {
 
     #[test]
     fn it_parses_pseudoroot_cert() {
-        let certificate = parse_certificate(&PSEUDOROOT_CERT_BYTES);
+        let certificate = parse_certificate(&PSEUDOROOT_CERT_BYTES).unwrap();
 
         println!("the certificate.version is : {:?}", &certificate.version);
         println!("the certificate.serial_number is : {:?}", &certificate.serial_number.to_string());
@@ -4082,8 +4093,8 @@ mod tests {
 
     #[test]
     fn test_checking_leaf_and_internal_cert() {
-        let internal_cert = parse_certificate(&INTERNAL_CERT_BYTES);
-        let mut leaf_cert = parse_certificate(&LEAF_CERT_BYTES);
+        let internal_cert = parse_certificate(&INTERNAL_CERT_BYTES).unwrap();
+        let mut leaf_cert = parse_certificate(&LEAF_CERT_BYTES).unwrap();
 
         println!("the leaf_cert.signature is : {:?}", &leaf_cert.signature);
         println!("the leaf_cert.signature_algorithm is : {:?}", &leaf_cert.signature_algorithm);
@@ -4182,8 +4193,8 @@ mod tests {
 
     #[test]
     fn test_checking_internal_and_pseudoroot_cert_ECDSA() {
-        let mut internal_cert = parse_certificate(&INTERNAL_CERT_BYTES_ECDSA);
-        let pseudoroot_cert = parse_certificate(&PSEUDOROOT_CERT_BYTES_ECDSA);
+        let mut internal_cert = parse_certificate(&INTERNAL_CERT_BYTES_ECDSA).unwrap();
+        let pseudoroot_cert = parse_certificate(&PSEUDOROOT_CERT_BYTES_ECDSA).unwrap();
 
         println!("the internal_cert.signature is : {:?}", &internal_cert.signature);
         println!(
