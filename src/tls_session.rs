@@ -178,7 +178,7 @@ pub fn key_pair() -> Keys {
 
 // AEAD helper functions
 
-fn decrypt(key: &[u8; 16], iv: &[u8; 12], wrapper: &[u8]) -> Vec<u8> {
+fn decrypt(key: &[u8; 16], iv: &[u8; 12], wrapper: &[u8]) -> Result<Vec<u8>,Vec<u8>> {
     let block = aes256gcm::new_cipher(key);
     let aes_gcm = aes256gcm::new_gcm(block);
 
@@ -186,7 +186,7 @@ fn decrypt(key: &[u8; 16], iv: &[u8; 12], wrapper: &[u8]) -> Vec<u8> {
     let ciphertext = &wrapper[5..];
 
     let plaintext = aes_gcm.open(&[], iv, ciphertext, additional);
-    return plaintext;
+    Ok(plaintext)
 }
 
 fn encrypt(key: &[u8; 16], iv: &[u8; 12], plaintext: &[u8], additional: &[u8]) -> Vec<u8> {
@@ -315,7 +315,7 @@ impl Session {
             return false;
         }
         let mut server_handshake_message =
-            decrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &record.0[..]);
+            decrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &record.0[..]).unwrap();
         //println!("server_handshake_message is : {:?}", &server_handshake_message);
         if server_handshake_message.len() > 2000 {
             self.messages.encrypted_server_handshake = record.clone();
@@ -331,7 +331,7 @@ impl Session {
                 let mut iv = self.keys.server_handshake_iv.clone();
                 iv[11] ^= records_received_counter;
                 let mut server_handshake_message_next_part =
-                    decrypt(&self.keys.server_handshake_key, &iv, &record.0[..]);
+                    decrypt(&self.keys.server_handshake_key, &iv, &record.0[..]).unwrap();
                 server_handshake_message_next_part =
                     format::trunc_end_with_trailer(&server_handshake_message_next_part, 22u8); // trunc end zeros with 22
                 //println!("server_handshake_message_next_part is : {:?}", &server_handshake_message_next_part);
@@ -602,7 +602,7 @@ impl Session {
             "receive_data self.keys.server_application_key is : {:?}",
             &self.keys.server_application_key
         );
-        let plaintext = decrypt(&self.keys.server_application_key, &iv, &record.0[..]);
+        let plaintext = decrypt(&self.keys.server_application_key, &iv, &record.0[..]).unwrap();
         println!("decrypted record is : {:?}", &plaintext);
         self.records_received += 1;
         self.messages.encrypted_ticket = record;
@@ -641,7 +641,7 @@ impl Session {
         iv[11] ^= self.records_received as u8;
 
         let plaintext =
-            decrypt(&self.keys.server_application_key, &iv.try_into().unwrap(), &record.0[..]);
+            decrypt(&self.keys.server_application_key, &iv.try_into().unwrap(), &record.0[..]).unwrap();
         println!("receive_http_data plaintext is : {:?}", &plaintext);
 
         self.records_received += 1;
@@ -1015,8 +1015,13 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         return vec![0u8, 3u8, 50u8]; // "not found encrypted server handshake"
     }
 
-    let server_handshake_message =
-        decrypt(&server_handshake_key, &server_handshake_iv, &encrypted_server_handshake[..]);
+    //let server_handshake_message = decrypt(&server_handshake_key, &server_handshake_iv, &encrypted_server_handshake[..]);
+    let decrypting_handshake_res = decrypt(&server_handshake_key, &server_handshake_iv, &encrypted_server_handshake[..]);
+    if decrypting_handshake_res.is_err() {
+        return decrypting_handshake_res.err().unwrap();
+    }
+    let server_handshake_message = decrypting_handshake_res.unwrap();
+
     let decrypted_server_handshake = DecryptedRecord { 0: server_handshake_message };
 
     // ============= begin make application keys ===================================
@@ -1184,11 +1189,21 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     // let mut records_received: u8 = 1;
     iv[11] ^= records_received;
 
-    let mut plaintext = decrypt(
+    //let mut plaintext = decrypt(
+        //&server_application_key,
+        //&iv.try_into().unwrap(),
+        //&http_response[..len_of_first_packet],
+    //);
+    let mut decryption_res = decrypt(
         &server_application_key,
         &iv.try_into().unwrap(),
         &http_response[..len_of_first_packet],
     );
+    if decryption_res.is_err() {
+        return decryption_res.err().unwrap();
+    }
+    let mut plaintext = decryption_res.unwrap();
+
     plaintext = format::trunc_end_with_trailer(&plaintext, 23u8); // trunc end zeroes with 23
 
     while records_received < records_received_declared - 1 {
@@ -1201,9 +1216,15 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         let ciphertext2 = &http_response[len_of_first_packet..len_of_first_packet + len_of_packet];
         let mut iv2 = server_application_iv.clone();
         iv2[11] ^= records_received;
-        let mut plaintext2 =
-            decrypt(&server_application_key, &iv2.try_into().unwrap(), &ciphertext2);
-        // plaintext2.pop();
+        decryption_res = decrypt(&server_application_key, &iv2.try_into().unwrap(), &ciphertext2);
+        
+        //let mut plaintext2 =
+            //decrypt(&server_application_key, &iv2.try_into().unwrap(), &ciphertext2);
+        if decryption_res.is_err() {
+            return decryption_res.err().unwrap();
+        }
+        let mut plaintext2 = decryption_res.unwrap();
+        
         plaintext2 = format::trunc_end_with_trailer(&plaintext2, 23u8); // trunc end zeroes with 23
 
         plaintext.append(&mut plaintext2);

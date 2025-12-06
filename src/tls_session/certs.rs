@@ -1566,7 +1566,7 @@ fn check_signature(
             hash_len_in_bits = 512;
             sha512::sum512(signed).to_vec()
         }
-        _ => panic!("unknown hash type"),
+        _ => return false, //panic!("unknown hash type"),
     };
 
     //match hash_type.unwrap() {
@@ -2202,14 +2202,15 @@ pub fn parse_certificate(der: &[u8]) -> Result<Certificate, Vec<u8>> {
     }
     if cert.public_key_algorithm != PublicKeyAlgorithm::UnknownPublicKeyAlgorithm {
         let public_key_info = PublicKeyInfo { raw: Vec::new(), algorithm: pk_ai, public_key: spk };
-        cert.public_key = parse_public_key(&public_key_info);
-        //cert.PublicKey, err = parsePublicKey(&publicKeyInfo{
-        //Algorithm: pkAI,
-        //PublicKey: spk,
-        //})
-        //if err != nil {
-        //return nil, err
-        //}
+
+        let parse_pk_res = parse_public_key(&public_key_info);
+
+        if parse_pk_res.is_err() {
+            return Err(parse_pk_res.err().unwrap());
+        }
+
+        cert.public_key = parse_pk_res.unwrap();
+        //cert.public_key = parse_public_key(&public_key_info);
     }
 
     if cert.version > 1 {
@@ -2938,7 +2939,7 @@ fn named_curve_from_oid(oid: &Vec<i32>) -> Option<ecdsa::Curve> {
     //return nil
 }
 
-fn parse_public_key(key_data: &PublicKeyInfo) -> PublicKey {
+fn parse_public_key(key_data: &PublicKeyInfo) -> Result<PublicKey, Vec<u8>> {
     let oid = &key_data.algorithm.algorithm;
     let params = key_data.algorithm.parameters.clone().unwrap().clone();
     let mut der = ASN1String { 0: key_data.public_key.right_align() }; // der = cryptobyte.String(key_data.publicKey.right_align() );
@@ -2947,38 +2948,38 @@ fn parse_public_key(key_data: &PublicKeyInfo) -> PublicKey {
             // RSA public keys must have a NULL in the parameters.
             // See RFC 3279, Section 2.3.1.
             if params.full_bytes != NULL_BYTES.to_vec() {
-                panic!("x509: RSA key missing NULL parameters");
+                return Err(vec![0u8, 21u8, 32u8]);//panic!("x509: RSA key missing NULL parameters");
             }
 
             let mut p = rsa::PublicKey { n: BigInt::from(0), e: 0i64 };
             let mut der1 = ASN1String { 0: Vec::new() };
             if !der.read_asn1(&mut der1, SEQUENCE) {
-                panic!("x509: invalid RSA public key");
+                return Err(vec![0u8, 21u8, 33u8]);//panic!("x509: invalid RSA public key");
             }
 
             match der1.read_asn1_big_int() {
                 Some(big_int) => p.n = big_int,
-                None => panic!("x509: invalid RSA modulus"),
+                None => return Err(vec![0u8, 21u8, 34u8]), // None => panic!("x509: invalid RSA modulus"),
             }
 
             if !der1.read_asn1_i64(&mut p.e) {
-                panic!("x509: invalid RSA public exponent");
+                return Err(vec![0u8, 21u8, 35u8]); //panic!("x509: invalid RSA public exponent");
             }
 
             if p.n.sign() == Sign::Minus {
-                panic!("x509: RSA modulus is not a positive number");
+                return Err(vec![0u8, 21u8, 36u8]); // panic!("x509: RSA modulus is not a positive number");
             }
             if p.e <= 0i64 {
-                panic!("x509: RSA public exponent is not a positive number");
+                return Err(vec![0u8, 21u8, 37u8]); // panic!("x509: RSA public exponent is not a positive number");
             }
 
-            return PublicKey::RsaPublicKey(p);
+            return Ok(PublicKey::RsaPublicKey(p));
         }
         val if val == OID_PUBLIC_KEY_ECDSA.as_slice() => {
             let mut params_der = ASN1String { 0: params.full_bytes.clone() }; // cryptobyte.String(params.FullBytes)
             let mut named_curve_oid: Vec<i32> = Vec::new();
             if !params_der.read_asn1_object_identifier(&mut named_curve_oid) {
-                panic!("x509: invalid ECDSA parameters");
+                return Err(vec![0u8, 21u8, 38u8]); //panic!("x509: invalid ECDSA parameters");
             }
             //let named_curve = named_curve_from_oid(&named_curve_oid);
             match named_curve_from_oid(&named_curve_oid) {
@@ -2988,26 +2989,26 @@ fn parse_public_key(key_data: &PublicKeyInfo) -> PublicKey {
                     //if x == nil {
                     //panic!("x509: failed to unmarshal elliptic curve point");
                     //}
-                    PublicKey::ECDSAPublicKey(ecdsa::PublicKey { curve: named_curve, x, y })
+                    Ok(PublicKey::ECDSAPublicKey(ecdsa::PublicKey { curve: named_curve, x, y }) )
                 }
-                None => panic!("x509: unsupported elliptic curve"),
+                None => return Err(vec![0u8, 21u8, 39u8]), //panic!("x509: unsupported elliptic curve"),
             }
         }
         val if val == OID_PUBLIC_KEY_ED25519.as_slice() => {
             // RFC 8410, Section 3
             // > For all of the OIDs, the parameters MUST be absent.
             if !params.full_bytes.is_empty() {
-                panic!("x509: Ed25519 key encoded with illegal parameters");
+                return Err(vec![0u8, 21u8, 40u8]); //panic!("x509: Ed25519 key encoded with illegal parameters");
             }
             if der.0.len() != ed25519::PUBLIC_KEY_SIZE {
-                panic!("x509: wrong Ed25519 public key size");
+                return Err(vec![0u8, 21u8, 41u8]); //panic!("x509: wrong Ed25519 public key size");
             }
 
-            PublicKey::ED25519PublicKey(ed25519::PublicKey(der.0))
+            Ok( PublicKey::ED25519PublicKey(ed25519::PublicKey(der.0)) )
         }
-        val if val == OID_PUBLIC_KEY_X25519.as_slice() => PublicKey::X25519PublicKey,
-        val if val == OID_PUBLIC_KEY_DSA.as_slice() => PublicKey::DsaPublicKey,
-        _ => panic!("x509: unknown public key algorithm"),
+        val if val == OID_PUBLIC_KEY_X25519.as_slice() => Ok(PublicKey::X25519PublicKey),
+        val if val == OID_PUBLIC_KEY_DSA.as_slice() => Ok(PublicKey::DsaPublicKey),
+        _ => return Err(vec![0u8, 21u8, 42u8]), //panic!("x509: unknown public key algorithm"),
     }
 }
 
@@ -3693,7 +3694,9 @@ pub fn check_certs_wasm(
     //println!("leaf_cert.subject.value: {:?}", leaf_cert.subject.names[]);
     match leaf_cert.subject.common_name.as_str() {
         "upload.video.google.com" => {
-            if internal_cert.subject.common_name != "WR2"
+            if internal_cert.subject.common_name != "WR1"
+                && internal_cert.subject.common_name != "WE1"
+                && internal_cert.subject.common_name != "WR2"
                 && internal_cert.subject.common_name != "WE2"
             {
                 return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
@@ -3720,7 +3723,9 @@ pub fn check_certs_wasm(
             }
         }
         "gosh.sh" => {
-            if internal_cert.subject.common_name != "WR2"
+            if internal_cert.subject.common_name != "WR1"
+                && internal_cert.subject.common_name != "WE1"
+                && internal_cert.subject.common_name != "WR2"
                 && internal_cert.subject.common_name != "WE2"
             {
                 return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"

@@ -96,6 +96,7 @@ impl ProviderData<'_> {
             root_cert: google_root_cert,
         }
     }
+
 }
 
 #[test]
@@ -110,6 +111,7 @@ fn main_test() {
     //let p = ProviderData::get_kakao();
     //let p = ProviderData::get_facebook();
     let p = ProviderData::get_gosh();
+
     let tls_session = get_jwk_tls_data(&p.domain, &p.jwk_get_request).unwrap();
 
     println!("TLS session data in hex: {:?}", tls_session.1);
