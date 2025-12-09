@@ -197,7 +197,7 @@ pub fn parse_server_hello(buf: &[u8]) -> Result<ServerHello, Vec<u8>> {
             }
         }
     } else {
-        return Err(vec![0u8, 5u8, 1u8]);//panic!("not enougth len");
+        return Err(vec![0u8, 5u8, 1u8]); //panic!("not enougth len");
     }
 
     Ok(hello)

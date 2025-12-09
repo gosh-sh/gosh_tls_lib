@@ -81,7 +81,8 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
         "www.googleapis.com" => {
             for root_cert_hex in certs::LV_GOOGLE_ROOTS_CERTS {
                 let root_cert =
-                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]).unwrap();
+                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..])
+                        .unwrap();
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
@@ -90,7 +91,8 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
         "kauth.kakao.com" => {
             for root_cert_hex in certs::LV_KAKAO_ROOTS_CERTS {
                 let root_cert =
-                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]).unwrap();
+                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..])
+                        .unwrap();
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
@@ -99,7 +101,8 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
         "www.facebook.com" => {
             for root_cert_hex in certs::LV_FACEBOOK_ROOTS_CERTS {
                 let root_cert =
-                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]).unwrap();
+                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..])
+                        .unwrap();
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
@@ -108,7 +111,8 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
         "jwt-tester.mystenlabs.com" => {
             for root_cert_hex in certs::LV_TEST_ISSUER_ROOTS_CERTS {
                 let root_cert =
-                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]).unwrap();
+                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..])
+                        .unwrap();
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
@@ -117,7 +121,8 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
         "oauth.gosh.sh" => {
             for root_cert_hex in certs::LV_GOOGLE_ROOTS_CERTS {
                 let root_cert =
-                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..]).unwrap();
+                    certs::parse_certificate(&hex::decode(root_cert_hex).unwrap().as_slice()[2..])
+                        .unwrap();
                 let root_cert_sn = format!("0x{:064x}", root_cert.serial_number.clone());
                 map.insert(root_cert_sn, root_cert_hex.to_string());
             }
@@ -178,7 +183,7 @@ pub fn key_pair() -> Keys {
 
 // AEAD helper functions
 
-fn decrypt(key: &[u8; 16], iv: &[u8; 12], wrapper: &[u8]) -> Result<Vec<u8>,Vec<u8>> {
+fn decrypt(key: &[u8; 16], iv: &[u8; 12], wrapper: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
     let block = aes256gcm::new_cipher(key);
     let aes_gcm = aes256gcm::new_gcm(block);
 
@@ -201,7 +206,12 @@ fn encrypt(key: &[u8; 16], iv: &[u8; 12], plaintext: &[u8], additional: &[u8]) -
 }
 
 // pub fn hkdf_expand_label(secret: &[u8; 32], label: &str, context: &[u8], length: u16) -> Vec<u8> {
-pub fn hkdf_expand_label(secret: &[u8; 32], label: &str, context: &[u8], length: u16) -> Result<Vec<u8>, Vec<u8>> {
+pub fn hkdf_expand_label(
+    secret: &[u8; 32],
+    label: &str,
+    context: &[u8],
+    length: u16,
+) -> Result<Vec<u8>, Vec<u8>> {
     // Construct HKDF label
     let mut hkdf_label = vec![];
     hkdf_label.extend_from_slice(&length.to_be_bytes());
@@ -224,7 +234,11 @@ pub fn hkdf_expand_label(secret: &[u8; 32], label: &str, context: &[u8], length:
     buf
 }
 
-pub fn derive_secret(secret: &[u8; 32], label: &str, transcript_messages: &[u8]) -> Result<[u8; 32], Vec<u8>> {
+pub fn derive_secret(
+    secret: &[u8; 32],
+    label: &str,
+    transcript_messages: &[u8],
+) -> Result<[u8; 32], Vec<u8>> {
     let hash = hkdf_sha256::sum256(transcript_messages);
     //println!("derive_secret hash is : {:?}", &hash);
     let secret = hkdf_expand_label(secret, label, &hash, 32).unwrap();
@@ -315,7 +329,8 @@ impl Session {
             return false;
         }
         let mut server_handshake_message =
-            decrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &record.0[..]).unwrap();
+            decrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &record.0[..])
+                .unwrap();
         //println!("server_handshake_message is : {:?}", &server_handshake_message);
         if server_handshake_message.len() > 2000 {
             self.messages.encrypted_server_handshake = record.clone();
@@ -479,13 +494,15 @@ impl Session {
         let derived_secret = derive_secret(&self.keys.handshake_secret, "derived", &[]).unwrap();
         let master_secret = hkdf_sha256::extract(&zeros, &derived_secret).unwrap(); //let master_secret = Hkdf::<Sha256>::extract(Some(&zeros), &derived_secret);
 
-        let c_ap_secret = derive_secret(&master_secret, "c ap traffic", &handshake_messages).unwrap();
+        let c_ap_secret =
+            derive_secret(&master_secret, "c ap traffic", &handshake_messages).unwrap();
         self.keys.client_application_key =
             hkdf_expand_label(&c_ap_secret, "key", &[], 16).unwrap().try_into().unwrap();
         self.keys.client_application_iv =
             hkdf_expand_label(&c_ap_secret, "iv", &[], 12).unwrap().try_into().unwrap();
 
-        let s_ap_secret = derive_secret(&master_secret, "s ap traffic", &handshake_messages).unwrap();
+        let s_ap_secret =
+            derive_secret(&master_secret, "s ap traffic", &handshake_messages).unwrap();
         self.keys.server_application_key =
             hkdf_expand_label(&s_ap_secret, "key", &[], 16).unwrap().try_into().unwrap();
         self.keys.server_application_iv =
@@ -527,7 +544,8 @@ impl Session {
 
         //self.server_hello.public_key=[246, 48, 130, 234, 125, 96, 179, 219, 52, 226, 168, 235, 57, 47, 53, 103, 96, 246, 129, 101, 202, 83, 142, 117, 64, 20, 47, 242, 241, 212, 56, 30];
         //println!("&self.server_hello.public_key is : {:?}", &self.server_hello.public_key);
-        let shared_secret = curve25519_donna(&self.keys.private, &self.server_hello.public_key).unwrap(); //let shared_secret = X25519::from_slice(&self.keys.private).mul(&self.server_hello.public_key);
+        let shared_secret =
+            curve25519_donna(&self.keys.private, &self.server_hello.public_key).unwrap(); //let shared_secret = X25519::from_slice(&self.keys.private).mul(&self.server_hello.public_key);
         //println!("shared_secret is : {:?}", shared_secret);
 
         let early_secret = hkdf_sha256::extract(&zeros, &psk).unwrap(); //let (early_secret, hkdf) = Hkdf::<Sha256>::extract(Some(&zeros), &psk);
@@ -545,7 +563,8 @@ impl Session {
         //0, 10, 0, 4, 0, 2, 0, 29, 0, 13, 0, 20, 0, 18, 4, 3, 8, 4, 4, 1, 5, 3, 8, 5, 5, 1, 8, 6, 6, 1, 2, 1, 0, 51, 0, 38, 0, 36, 0, 29, 0, 32, 192, 66, 56, 95, 6, 86, 129, 217, 28, 232, 5, 177, 109, 189, 139, 154, 6, 3, 215, 62, 202, 195, 214, 238, 231, 82, 157, 198, 107, 200, 81, 16, 0, 45, 0, 2, 1, 1, 0, 43, 0, 3, 2, 3, 4, 2, 0, 0, 86, 3, 3, 8, 215, 19, 207, 58, 155, 125, 3, 157, 121, 43, 159, 152, 229, 77, 159, 41, 50, 150, 5, 171, 174, 144, 47, 121, 11, 241, 132, 255, 77, 16, 244, 0, 19, 1, 0, 0, 46, 0, 51, 0, 36, 0, 29, 0, 32, 246, 48, 130, 234, 125, 96, 179, 219, 52, 226, 168, 235, 57, 47, 53, 103, 96, 246, 129, 101, 202, 83, 142, 117, 64, 20, 47, 242, 241, 212, 56, 30, 0, 43, 0, 2, 3, 4];
 
         let c_hs_secret =
-            derive_secret(&self.keys.handshake_secret, "c hs traffic", &handshake_messages).unwrap();
+            derive_secret(&self.keys.handshake_secret, "c hs traffic", &handshake_messages)
+                .unwrap();
         self.keys.client_handshake_secret = c_hs_secret.clone();
         self.keys.client_handshake_key =
             hkdf_expand_label(&c_hs_secret, "key", &[], 16).unwrap().try_into().unwrap();
@@ -555,7 +574,8 @@ impl Session {
         //println!("self.keys.client_handshake_iv is : {:?}", self.keys.client_handshake_iv);
 
         let s_hs_secret =
-            derive_secret(&self.keys.handshake_secret, "s hs traffic", &handshake_messages).unwrap();
+            derive_secret(&self.keys.handshake_secret, "s hs traffic", &handshake_messages)
+                .unwrap();
         //let session_keys_server_handshake_key = hkdf_expand_label(&s_hs_secret, "key", &[], 16);
         //println!("session_keys_server_handshake_key_ is : {:?}", &session_keys_server_handshake_key);
         self.keys.server_handshake_key =
@@ -641,7 +661,8 @@ impl Session {
         iv[11] ^= self.records_received as u8;
 
         let plaintext =
-            decrypt(&self.keys.server_application_key, &iv.try_into().unwrap(), &record.0[..]).unwrap();
+            decrypt(&self.keys.server_application_key, &iv.try_into().unwrap(), &record.0[..])
+                .unwrap();
         println!("receive_http_data plaintext is : {:?}", &plaintext);
 
         self.records_received += 1;
@@ -776,7 +797,8 @@ pub fn is_valid_client_hello(provider: &[u8], data: &[u8]) -> bool {
             len_of_hostname = 20;
             if data[54..74]
                 != [
-                    0, 18, 0, 16, 0, 0, 13,  111, 97, 117, 116, 104, 46, 103, 111, 115, 104, 46, 115, 104
+                    0, 18, 0, 16, 0, 0, 13, 111, 97, 117, 116, 104, 46, 103, 111, 115, 104, 46,
+                    115, 104,
                 ]
             {
                 return false; // "oauth.gosh.sh"
@@ -952,8 +974,6 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     }
     let shared_secret = shared_secret_result.unwrap();
 
-
-
     // Handshake using HKDF
     //let early_secret = hkdf_sha256::extract(&zeros, &psk);
     let early_extract_result = hkdf_sha256::extract(&zeros, &psk);
@@ -975,7 +995,6 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         return handshake_extract_result.err().unwrap();
     }
     let handshake_secret = handshake_extract_result.unwrap();
-
 
     let handshake_messages = format::concatenate(&[&client_hello[5..], &server_hello[5..]]);
 
@@ -1000,8 +1019,6 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     }
     let server_handshake_key: [u8; 16] = handshake_key_result.unwrap().try_into().unwrap();
 
-
-
     //let server_handshake_iv: [u8; 12] = hkdf_expand_label(&s_hs_secret, "iv", &[], 12).try_into().unwrap();
 
     let handshake_iv_res = hkdf_expand_label(&s_hs_secret, "iv", &[], 12);
@@ -1016,7 +1033,8 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     }
 
     //let server_handshake_message = decrypt(&server_handshake_key, &server_handshake_iv, &encrypted_server_handshake[..]);
-    let decrypting_handshake_res = decrypt(&server_handshake_key, &server_handshake_iv, &encrypted_server_handshake[..]);
+    let decrypting_handshake_res =
+        decrypt(&server_handshake_key, &server_handshake_iv, &encrypted_server_handshake[..]);
     if decrypting_handshake_res.is_err() {
         return decrypting_handshake_res.err().unwrap();
     }
@@ -1045,7 +1063,6 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     }
     let master_secret = master_extract_result.unwrap();
 
-
     // let c_ap_secret = derive_secret(&master_secret, "c ap traffic",
     // &handshake_messages); let client_application_key: [u8;16] =
     // hkdf_expand_label(&c_ap_secret, "key", &[], 16).try_into().unwrap();
@@ -1058,7 +1075,7 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         return s_ap_secret_result.err().unwrap();
     }
     let s_ap_secret = s_ap_secret_result.unwrap();
-    
+
     //let server_application_key: [u8; 16] = hkdf_expand_label(&s_ap_secret, "key", &[], 16).try_into().unwrap();
 
     let application_key_res = hkdf_expand_label(&s_ap_secret, "key", &[], 16);
@@ -1073,7 +1090,6 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         return application_iv_res.err().unwrap();
     }
     let server_application_iv: [u8; 12] = application_iv_res.unwrap().try_into().unwrap();
-
 
     // ========== begin check handshake ================
     let handshake_data = decrypted_server_handshake.contents(); //[5..];
@@ -1190,9 +1206,9 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     iv[11] ^= records_received;
 
     //let mut plaintext = decrypt(
-        //&server_application_key,
-        //&iv.try_into().unwrap(),
-        //&http_response[..len_of_first_packet],
+    //&server_application_key,
+    //&iv.try_into().unwrap(),
+    //&http_response[..len_of_first_packet],
     //);
     let mut decryption_res = decrypt(
         &server_application_key,
@@ -1217,14 +1233,14 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         let mut iv2 = server_application_iv.clone();
         iv2[11] ^= records_received;
         decryption_res = decrypt(&server_application_key, &iv2.try_into().unwrap(), &ciphertext2);
-        
+
         //let mut plaintext2 =
-            //decrypt(&server_application_key, &iv2.try_into().unwrap(), &ciphertext2);
+        //decrypt(&server_application_key, &iv2.try_into().unwrap(), &ciphertext2);
         if decryption_res.is_err() {
             return decryption_res.err().unwrap();
         }
         let mut plaintext2 = decryption_res.unwrap();
-        
+
         plaintext2 = format::trunc_end_with_trailer(&plaintext2, 23u8); // trunc end zeroes with 23
 
         plaintext.append(&mut plaintext2);

@@ -696,7 +696,7 @@ pub fn curve25519_donna(mypublic: &mut [u8; 32], secret: &[u8; 32], basepoint: &
 }*/
 
 //pub fn curve25519_donna(secret: &[u8; 32], basepoint: &[u8; 32]) -> [u8; 32] -> Result<[u8; 32], Vec<u8>>  {
-pub fn curve25519_donna(secret: &[u8; 32], basepoint: &[u8; 32]) -> Result<[u8; 32], Vec<u8>>  {
+pub fn curve25519_donna(secret: &[u8; 32], basepoint: &[u8; 32]) -> Result<[u8; 32], Vec<u8>> {
     // error codes [4][1]...[4][255]
     let mut bp = [0; 19];
     let mut x = [0; 19];
