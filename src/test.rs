@@ -33,9 +33,9 @@ impl ProviderData<'_> {
         //https://www.googleapis.com/oauth2/v3/certs
         //let domain = "www.googleapis.com";
         //let jwk_get_request = "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ";
-        let google_kid: Vec<u8> = hex::decode("c8ab71530972bba20b49f78a09c9852c43ff9118").unwrap();
-        //let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g4().to_vec();
-        let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g1().to_vec();
+        let google_kid: Vec<u8> = hex::decode("d543e21a0273efc66a4750002441cb2151cb235f").unwrap();
+        let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g4().to_vec();
+        //let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g1().to_vec();
         ProviderData {
             domain: "www.googleapis.com",
             jwk_get_request: "GET /oauth2/v3/certs HTTP/1.1\r\nHost: ",
@@ -69,7 +69,7 @@ impl ProviderData<'_> {
         // let domain = "www.facebook.com";
         // let jwk_get_request = "GET /.well-known/oauth/openid/jwks/ HTTP/1.1\r\nHost: ";
         let facebook_kid: Vec<u8> =
-            hex::decode("e4f6715b789895089f5c26d53b01a2991ed2772b").unwrap();
+            hex::decode("b6f9a5e56aca7a59330458053440602999a4a4cd").unwrap();
         let facebook_root_cert: Vec<u8> = tls_session::get_root_cert_facebook_2().to_vec();
         ProviderData {
             domain: "www.facebook.com",
@@ -79,6 +79,22 @@ impl ProviderData<'_> {
             index_mod_4: 1,
             kid: facebook_kid,
             root_cert: facebook_root_cert,
+        }
+    }
+
+    pub fn get_gosh() -> Self {
+        // https://oauth.gosh.sh/v1/certs
+        let gosh_kid: Vec<u8> = hex::decode("ff8eed04282f1dbd89f5a79b787d67bc87620597").unwrap();
+        let google_root_cert: Vec<u8> = tls_session::get_root_cert_google_g4().to_vec();
+
+        ProviderData {
+            domain: "oauth.gosh.sh",
+            jwk_get_request: "GET /v1/certs HTTP/1.1\r\nHost: ",
+            issuer: "ImlzcyI6Imh0dHBzOi8vb2F1dGguZ29zaC5zaCIs", //
+            issuer_decoded: "676f7368",
+            index_mod_4: 1,
+            kid: gosh_kid,
+            root_cert: google_root_cert,
         }
     }
 }
@@ -91,9 +107,11 @@ fn main_test_certs() {
 
 #[test]
 fn main_test() {
-    let p = ProviderData::get_google();
+    //let p = ProviderData::get_google();
     //let p = ProviderData::get_kakao();
-    //let p = ProviderData::get_facebook();
+    let p = ProviderData::get_facebook();
+    //let p = ProviderData::get_gosh();
+
     let tls_session = get_jwk_tls_data(&p.domain, &p.jwk_get_request).unwrap();
 
     println!("TLS session data in hex: {:?}", tls_session.1);
