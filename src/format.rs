@@ -33,12 +33,16 @@ impl DecryptedRecord {
         DecryptedRecord { 0: vec![] }
     }
 
+    // F-03: saturating accessors. Empty / short records used to panic via
+    // `.expect()` and `[..len-1]` indexing; both were reachable from malformed
+    // wire input. Callers already gate logic on cert validation downstream, so
+    // returning 0 / empty here is fail-closed.
     pub fn rtype(&self) -> u8 {
-        *self.0.last().expect("DecryptedRecord is empty")
+        self.0.last().copied().unwrap_or(0)
     }
 
     pub fn contents(&self) -> &[u8] {
-        &self.0[..self.0.len() - 1]
+        if self.0.is_empty() { &[] } else { &self.0[..self.0.len() - 1] }
     }
 }
 
@@ -62,21 +66,20 @@ impl Record {
         Record { 0: vec![] }
     }
 
+    // F-03: contents()/rtype()/spoken_len() must not panic on a short record.
+    // The 5-byte TLS header (type | 0x03 0x03 | length-be16) might be absent
+    // for a malformed peer; callers already detect bad records via downstream
+    // AEAD / handshake checks.
     pub fn contents(&self) -> &[u8] {
-        &self.0[5..]
+        if self.0.len() >= 5 { &self.0[5..] } else { &[] }
     }
 
-    // first five bytes (TLS header) are:
-    // 16 or 17 (unencrypted or encrypted)
-    // 03 03 (means TLS 1.2)
-    // two bytes (length of message + 4)
-
     pub fn spoken_len(&self) -> u16 {
-        (self.0[3] as u16) * 256 + (self.0[4] as u16)
+        if self.0.len() >= 5 { u16::from_be_bytes([self.0[3], self.0[4]]) } else { 0 }
     }
 
     pub fn rtype(&self) -> u8 {
-        *self.0.first().expect("Record is empty")
+        self.0.first().copied().unwrap_or(0)
     }
 }
 
@@ -142,80 +145,84 @@ pub fn parse_server_hello(buf: &[u8]) -> Result<ServerHello, Vec<u8>> {
     // Skip tls type of message:
     current_pos = current_pos + 2; // 03 03 (client protocol version = "TLS 1.2") // buf.take(2);
 
-    if &current_pos + 32 < buf.len() {
-        // if let Some(random_bytes) = buf.take(32) {
-        let random_bytes = &buf[current_pos..current_pos + 32];
-        hello.random = random_bytes.try_into().unwrap(); //hello.random.extend_from_slice(random_bytes);
-        current_pos = current_pos + 32;
+    // F-03: every slice read below must be bounds-checked before indexing.
+    // Previously each `&buf[i..i+n]` on attacker-controlled `i` was a process
+    // crash on malformed ServerHello.
+    if current_pos + 32 > buf.len() {
+        return Err(vec![0u8, 5u8, 1u8]);
+    }
+    let random_bytes: [u8; 32] = match buf[current_pos..current_pos + 32].try_into() {
+        Ok(b) => b,
+        Err(_) => return Err(vec![0u8, 5u8, 1u8]),
+    };
+    hello.random = random_bytes;
+    current_pos += 32;
 
-        let session_id_len: u8 = buf[current_pos]; // let session_id_len = buf.read_u8().expect("Can t read len of session ID");
-        current_pos = current_pos + 1;
-        //let session_id = buf.read_bytes(session_id_len);
-        current_pos = current_pos + (session_id_len as usize);
+    if current_pos + 1 > buf.len() {
+        return Err(vec![0u8, 5u8, 2u8]);
+    }
+    let session_id_len = buf[current_pos] as usize;
+    current_pos += 1 + session_id_len;
 
-        current_pos = current_pos + 2; //buf.take(2); // cipher suite
-        current_pos = current_pos + 1; // buf.take(1); // compression
+    // cipher suite (2) + compression (1) + extensions_len (2)
+    current_pos += 5;
+    if current_pos > buf.len() {
+        return Err(vec![0u8, 5u8, 3u8]);
+    }
 
-        //let mut dst = [0u8; 2];
-        //dst.clone_from_slice(&buf[current_pos..current_pos+2]);
-        //let _extensions_len = u16::from_be_bytes(dst);//let extensions_len = buf.read_u16().expect("Can t read len of extensions!");
-        //let extensions = buf.read_bytes(extensions_len); // need check extension
-        current_pos = current_pos + 2;
-
-        while &current_pos + 2 < buf.len() {
-            // !extensions.is_empty()
-            //dst.clone_from_slice(&buf[&current_pos..&current_pos+2]);
-            let typ = u16::from_be_bytes(buf[current_pos..current_pos + 2].try_into().unwrap()); //let typ = extensions.read_u16().expect("can t read type of extension");
-            //current_pos = current_pos + 2;
-            //let extension_length = u16::from_be_bytes(buf[&current_pos..&current_pos+2]);// let extension_length = extensions.read_u16().expect("can t read len of extension");
-            //current_pos = current_pos + 2;
-            //let content = &buf[&current_pos..&current_pos+&extension_length];
-            //current_pos = current_pos + extension_length;
-            match typ {
-                0x0033 => {
-                    // key share
-                    current_pos = current_pos + 4;
-                    // bypass type of key
-                    current_pos = current_pos + 2; //let _ = contents.read_u16().expect("can t read type of key"); // 00 1d means x25519
-                    let public_key_length =
-                        u16::from_be_bytes(buf[current_pos..current_pos + 2].try_into().unwrap()); //let public_key_length = contents.read_u16().expect("can t read len of public key");
-                    current_pos = current_pos + 2;
-                    let public_key_bytes =
-                        &buf[current_pos..current_pos + (public_key_length as usize)];
-                    hello.public_key = public_key_bytes.try_into().unwrap(); // hello.public_key = public_key_bytes.to_vec();
+    while current_pos + 2 <= buf.len() {
+        let typ = u16::from_be_bytes([buf[current_pos], buf[current_pos + 1]]);
+        match typ {
+            0x0033 => {
+                // key_share extension: ext_type(2) ext_len(2) group(2) key_len(2) key(key_len)
+                if current_pos + 8 > buf.len() {
+                    return Err(vec![0u8, 5u8, 4u8]);
                 }
-                0x002b => {
-                    // Ignore TLS version (and its nength, constantly equal to 2)
-                    current_pos = current_pos + 6;
+                current_pos += 6;
+                let public_key_length =
+                    u16::from_be_bytes([buf[current_pos], buf[current_pos + 1]]) as usize;
+                current_pos += 2;
+                if current_pos + public_key_length > buf.len() {
+                    return Err(vec![0u8, 5u8, 5u8]);
                 }
-                _ => {
-                    let extension_len =
-                        u16::from_be_bytes(buf[current_pos..current_pos + 2].try_into().unwrap());
-                    current_pos = current_pos + 4;
-                    current_pos = current_pos + (extension_len as usize);
+                let public_key_bytes = &buf[current_pos..current_pos + public_key_length];
+                hello.public_key = match public_key_bytes.try_into() {
+                    Ok(b) => b,
+                    Err(_) => return Err(vec![0u8, 5u8, 6u8]),
+                };
+            }
+            0x002b => {
+                // supported_versions; ignore (type(2) len(2) version(2)).
+                current_pos += 6;
+            }
+            _ => {
+                if current_pos + 4 > buf.len() {
+                    return Err(vec![0u8, 5u8, 7u8]);
                 }
+                let extension_len =
+                    u16::from_be_bytes([buf[current_pos + 2], buf[current_pos + 3]]) as usize;
+                current_pos += 4 + extension_len;
             }
         }
-    } else {
-        return Err(vec![0u8, 5u8, 1u8]); //panic!("not enougth len");
     }
 
     Ok(hello)
 }
 
-pub fn read_record(reader: &mut TcpStream) -> Record {
-    // pub fn read_record<R: Read>(reader: &mut R) -> Record {
+// F-03: read_record now returns io::Result. Previously a broken socket / EOF
+// during handshake panicked via `expect`, so any peer that closes the
+// connection mid-record DoSed the client.
+pub fn read_record(reader: &mut TcpStream) -> std::io::Result<Record> {
     let mut buf = [0u8; 5];
-    reader.read_exact(&mut buf).expect("Failed to read 5 bytes");
+    reader.read_exact(&mut buf)?;
 
-    let length = u16::from_be_bytes(buf[3..5].try_into().unwrap()) as usize; // let length = BigEndian::read_u16(&buf[3..5]) as usize;
-    println!("length is : {:?}", length);
-    let contents = read(length, reader);
+    let length = u16::from_be_bytes([buf[3], buf[4]]) as usize;
+    let contents = read(length, reader)?;
 
     let mut record = buf.to_vec();
     record.extend_from_slice(&contents);
 
-    Record { 0: record }
+    Ok(Record { 0: record })
 }
 
 //pub fn read_record<R: Read>(reader: &mut R) -> Record {
@@ -227,19 +234,25 @@ pub fn read_record(reader: &mut TcpStream) -> Record {
 //concatenate(buf, contents)
 //}
 
-pub fn read(length: usize, reader: &mut dyn Read) -> Vec<u8> {
+pub fn read(length: usize, reader: &mut dyn Read) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     while buf.len() < length {
-        buf.extend(read_upto(length - buf.len(), reader));
+        let chunk = read_upto(length - buf.len(), reader)?;
+        if chunk.is_empty() {
+            // F-03: peer closed mid-record; surface as UnexpectedEof rather
+            // than spinning indefinitely.
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "short record"));
+        }
+        buf.extend(chunk);
     }
-    buf
+    Ok(buf)
 }
 
-pub fn read_upto(length: usize, reader: &mut dyn Read) -> Vec<u8> {
+pub fn read_upto(length: usize, reader: &mut dyn Read) -> std::io::Result<Vec<u8>> {
     let mut buf = vec![0u8; length];
-    let n = reader.read(&mut buf).expect("Failed to read data");
+    let n = reader.read(&mut buf)?;
     buf.truncate(n);
-    buf
+    Ok(buf)
 }
 
 // pub fn concatenate(bufs: Vec<&[u8]>) -> Vec<u8> {
@@ -284,29 +297,23 @@ pub fn extract_all_items(item: &str, data: &str) -> Vec<String> {
     results // outputs an vector of found substrings
 }
 
-pub fn extract_expires(data: &str) -> i64 {
-    let target = r#"Date: "#; // let target = r#"Expires: "#; // substring we are looking for
-    let start = data.find(target).unwrap();
-    let start_pos = start + target.len(); // position after substring
-    let end = data[start_pos..].find('\n').unwrap();
-    let end_pos = start_pos + end; // position after substring
-    let date_time_string = data[start_pos..end_pos].to_string();
-
-    let target = r#"Expires: "#;
-    let find_res = data.find(target);
-    if find_res.is_some() {
-        let start = find_res.unwrap();
+// F-03: HTTP response is attacker-controlled (forged Date: / Expires: headers
+// in a malformed reply previously panicked via .unwrap()). Return Option and
+// let the caller decide what to do.
+pub fn extract_expires(data: &str) -> Option<i64> {
+    fn extract_line<'a>(data: &'a str, target: &str) -> Option<&'a str> {
+        let start = data.find(target)?;
         let start_pos = start + target.len();
-        let end = data[start_pos..].find('\n').unwrap();
-        let end_pos = start_pos + end;
-        let expires_time_string = data[start_pos..end_pos].to_string(); // for Google
-        let dt: DateTime<FixedOffset> =
-            DateTime::parse_from_rfc2822(&expires_time_string.trim()).unwrap();
-        return dt.timestamp();
-    } else {
-        let dt: DateTime<FixedOffset> =
-            DateTime::parse_from_rfc2822(&date_time_string.trim()).unwrap();
-        let timestamp = dt.timestamp();
-        return timestamp + 18223; // Date + 18223 = Expires (as for Google)
+        let end = data[start_pos..].find('\n')?;
+        Some(&data[start_pos..start_pos + end])
     }
+
+    if let Some(expires) = extract_line(data, "Expires: ") {
+        let dt = DateTime::parse_from_rfc2822(expires.trim()).ok()?;
+        return Some(dt.timestamp());
+    }
+
+    let date = extract_line(data, "Date: ")?;
+    let dt: DateTime<FixedOffset> = DateTime::parse_from_rfc2822(date.trim()).ok()?;
+    Some(dt.timestamp() + 18223) // Date + 18223 = Expires (Google default)
 }

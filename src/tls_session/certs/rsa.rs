@@ -2,9 +2,64 @@ use num_bigint::BigInt;
 use num_bigint::BigUint;
 use num_traits::Zero;
 
-//use std::error::Error;
-//use std::fmt;
-use crate::tls_session::hkdf_sha256::Digest;
+use crate::tls_session::hkdf_sha256;
+use crate::tls_session::sha512;
+
+// F-05: pluggable hash for PSS. RSA-PSS verifiers must honour the hash
+// algorithm declared by the certificate's signature algorithm OID (SHA-256
+// for PSS-SHA256, SHA-384 for PSS-SHA384, SHA-512 for PSS-SHA512). Previously
+// the inner hash was hard-wired to SHA-256, which silently mis-validates
+// SHA-384/SHA-512 PSS certificates.
+#[derive(Clone)]
+enum PssHash {
+    Sha256(hkdf_sha256::Digest),
+    Sha384(sha512::Digest),
+    Sha512(sha512::Digest),
+}
+
+impl PssHash {
+    fn new(hash_len_in_bits: usize) -> Option<PssHash> {
+        match hash_len_in_bits {
+            256 => Some(PssHash::Sha256(hkdf_sha256::Digest::new())),
+            384 => Some(PssHash::Sha384(sha512::Digest::new384())),
+            512 => Some(PssHash::Sha512(sha512::Digest::new512())),
+            _ => None,
+        }
+    }
+
+    fn output_size(&self) -> usize {
+        match self {
+            PssHash::Sha256(_) => 32,
+            PssHash::Sha384(_) => 48,
+            PssHash::Sha512(_) => 64,
+        }
+    }
+
+    fn write(&mut self, data: &[u8]) {
+        match self {
+            PssHash::Sha256(d) => {
+                d.write(data);
+            }
+            PssHash::Sha384(d) | PssHash::Sha512(d) => {
+                d.write(data);
+            }
+        }
+    }
+
+    fn sum(&self) -> Vec<u8> {
+        match self {
+            PssHash::Sha256(d) => d.sum(&[]),
+            PssHash::Sha384(d) | PssHash::Sha512(d) => d.sum(&[]),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            PssHash::Sha256(d) => d.reset(),
+            PssHash::Sha384(d) | PssHash::Sha512(d) => d.reset(),
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub struct PublicKey {
@@ -14,11 +69,20 @@ pub struct PublicKey {
 
 impl PublicKey {
     pub fn size(&self) -> usize {
-        (self.n.bits() + 7) / 8
+        ((self.n.bits() as usize) + 7) / 8
     }
 
+    // F-11: constant-time equality on public-key material. RSA public keys
+    // are not secret, so today there is no leak — but pinned PublicKey::equal
+    // sits next to authenticator-comparison sites and should default to CT to
+    // avoid regression hazards.
     pub fn equal(&self, other: &PublicKey) -> bool {
-        &self.n == &other.n && self.e == other.e
+        use subtle::ConstantTimeEq;
+        let a_n = self.n.to_signed_bytes_be();
+        let b_n = other.n.to_signed_bytes_be();
+        let n_eq: bool = a_n.ct_eq(&b_n).into();
+        let e_eq: bool = self.e.to_be_bytes().ct_eq(&other.e.to_be_bytes()).into();
+        n_eq & e_eq
     }
 }
 
@@ -43,89 +107,84 @@ pub fn check_pub(pub_key: &PublicKey) -> bool {
     true //Ok(())
 }
 
-// fn encrypt(pubkey: *PublicKey, plaintext: &[u8]) -> ([]byte, error) {
-fn encrypt(pubkey: &PublicKey, plaintext: &[u8]) -> Vec<u8> {
-    //let n = Modulus::new_modulus_from_big(&pub_key.n)?; // N, err := bigmod.NewModulusFromBig(pub.N)
-    // if err != nil {
-    // 		return nil, err
-    // 	}
-    //let m = Nat::new().set_bytes(plaintext, &n)?; // m, err := bigmod.NewNat().SetBytes(plaintext, N)
+// F-05: zero-pad to the modulus byte length. `BigUint::to_bytes_be` strips
+// leading zeros, which is wrong for RSA encoded-message buffers — callers
+// assume a fixed-size em of (em_bits + 7) / 8 (or k for PKCS#1 v1.5) and
+// index into it. Without padding, small m^e mod n values yield em.len() <
+// expected_len and slice indexing panics.
+fn encrypt(pubkey: &PublicKey, plaintext: &[u8], em_len: usize) -> Vec<u8> {
+    let base = BigUint::from_bytes_be(&plaintext);
+    let modulus = match pubkey.n.to_biguint() {
+        Some(m) => m,
+        None => return vec![0u8; em_len],
+    };
+    let exponent = match BigInt::from(pubkey.e.clone()).to_biguint() {
+        Some(e) => e,
+        None => return vec![0u8; em_len],
+    };
 
-    // if err != nil {
-    // 		return nil, err
-    // 	}
-    //let e = pub_key.e as u32; // e := uint(pub.E)
+    let result = base.modpow(&exponent, &modulus).to_bytes_be();
 
-    //let result = Nat::new().exp_short_var_time(&m, e, &n);
-    //result.bytes(&n) // Ok(result.bytes(&n)) //return bigmod.NewNat().ExpShortVarTime(m, e, N).Bytes(N), nil
-
-    let base = BigUint::from_bytes_be(&plaintext); //let base = BigInt::from_bytes_be(Sign::Plus, &plaintext);
-    let modulus = &pubkey.n.to_biguint().unwrap(); //let modulus = &pubkey.n;
-    let exponent = BigInt::from(pubkey.e.clone()).to_biguint().unwrap(); //let exponent = BigInt::from(pubkey.e.clone());
-
-    let result = base.modpow(&exponent, &modulus);
-
-    result.to_bytes_be() //result.to_signed_bytes_be()
+    if result.len() >= em_len {
+        result[result.len() - em_len..].to_vec()
+    } else {
+        let mut padded = vec![0u8; em_len - result.len()];
+        padded.extend_from_slice(&result);
+        padded
+    }
 }
 
-// fn verify_pkcs1v15(pub_key: &PublicKey, hash: usize, hashed: &[u8], sig: &[u8]) -> Result<(), Box<dyn Error>> {
 pub fn verify_pkcs1v15(pub_key: &PublicKey, hash: usize, hashed: &[u8], sig: &[u8]) -> bool {
-    let (hash_len, prefix) = pkcs1v15_hash_info(hash, hashed.len()); // let (hash_len, prefix) = pkcs1v15_hash_info(hash, hashed.len())?;
-    let t_len = &prefix.clone().unwrap().len() + hash_len / 8;
+    let (hash_len, prefix_opt) = pkcs1v15_hash_info(hash, hashed.len());
+    let prefix = match prefix_opt {
+        Some(p) => p,
+        None => return false,
+    };
+    let t_len = prefix.len() + hash_len / 8;
     let k = pub_key.size();
 
     if k < t_len + 11 {
-        return false; //return Err("verification error".into());
+        return false;
     }
 
     if k != sig.len() {
-        return false; // return Err("verification error".into());
+        return false;
     }
 
-    let em = encrypt(pub_key, sig); // let em = encrypt(pub_key, sig)?;
+    let em = encrypt(pub_key, sig, k);
 
-    //let mut ok = em[0] == 0 && em[1] == 1;
-    //ok &= &em[k - hash_len/8..k] == hashed;
-    //ok &= &em[k - t_len..(k - hash_len/8)] == &prefix.unwrap();
-    //ok &= em[k - t_len - 1] == 0;
-
-    let mut ok = em[0] == 1;
-    ok &= &em[k - 1 - hash_len / 8..k - 1] == hashed;
-    ok &= &em[k - 1 - t_len..(k - 1 - hash_len / 8)] == &prefix.unwrap();
-    ok &= em[k - 1 - t_len - 1] == 0;
-
-    //for i in 2..(k - t_len - 1) {
-    //ok &= em[i] == 0xff;
-    //}
-
+    // PKCS#1 v1.5 EMSA encoded message layout (RFC 8017 §9.2):
+    //   EM = 0x00 || 0x01 || PS || 0x00 || T
+    // where T = DigestInfo (prefix || hashed). encrypt() now zero-pads to k,
+    // so em[0] is the literal 0x00 prefix byte (previously to_bytes_be stripped
+    // it, and the indices below were skewed by one to compensate).
+    let mut ok = em[0] == 0x00;
+    ok &= em[1] == 0x01;
+    ok &= &em[k - hash_len / 8..k] == hashed;
+    ok &= &em[k - t_len..k - hash_len / 8] == &prefix[..];
+    ok &= em[k - t_len - 1] == 0x00;
     for i in 2..(k - t_len - 1) {
-        ok &= em[i - 1] == 0xff;
+        ok &= em[i] == 0xff;
     }
 
     if !ok {
-        return false; //return Err("verification error".into());
+        return false;
     }
 
-    true //Ok(())
+    true
 }
 
 fn pkcs1v15_hash_info(hash: usize, in_len: usize) -> (usize, Option<Vec<u8>>) {
-    // fn pkcs1v15_hash_info(hash: CryptoHash, in_len: usize) -> Result<(usize, Option<Vec<u8>>), Box<dyn Error>> {
-    // Special case: hash 0 is used to indicate that the data
-    //  is directly signed.
     if hash == 0 {
-        // if hash.size() == 0 {
-        return (in_len, None); // return Ok((in_len, None));
+        return (in_len, None);
     }
-
-    //let hash_len = hash.size();
     if in_len != hash / 8 {
-        // if in_len != hash_len {
-        panic!("crypto/rsa: input must be hashed message"); //return Err("crypto/rsa: input must be hashed message".into());
+        // F-03: malformed cert can hit this path; signal failure to the caller
+        // instead of crashing the process.
+        return (0, None);
     }
-
-    let prefix = get_hash_prefix(hash); // let prefix = get_hash_prefix(&hash)?;
-    (hash, prefix) // Ok((hash_len, prefix))
+    let prefix = get_hash_prefix(hash);
+    (hash, prefix)
 }
 
 // fn get_hash_prefix(hash: usize) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -198,45 +257,43 @@ pub fn verify_pss(
     opts: &PSSOptions,
 ) -> bool {
     if sig.len() != pub_key.size() {
-        return false; // "ErrVerification"
+        return false;
     }
 
     if opts.salt_length < PSS_SALT_LENGTH_EQUALS_HASH {
-        return false; // invalidSaltLenErr;
+        return false;
     }
-    let em_bits = pub_key.n.bits() - 1;
+    // F-05: pick the hash that matches the certificate's PSS signature
+    // algorithm. SHA-256 / SHA-384 / SHA-512 are the only valid choices
+    // for TLS 1.3 RSA-PSS.
+    let hasher = match PssHash::new(hash) {
+        Some(h) => h,
+        None => return false,
+    };
+    let em_bits = (pub_key.n.bits() as usize) - 1;
     let em_len = (em_bits + 7) / 8;
-    let em = encrypt(pub_key, sig);
+    // F-05: encode at em_len exactly. encrypt() now zero-pads internally,
+    // so the obsolete "strip leading zeros" loop is gone.
+    let em = encrypt(pub_key, sig, em_len);
 
-    // Like in signPSSWithSalt, deal with mismatches between emLen and the size
-    // of the modulus. The spec would have us wire emLen into the encoding
-    // function, but we'd rather always encode to the size of the modulus and
-    // then strip leading zeroes if necessary. This only happens for weird
-    // modulus sizes anyway.
-
-    for i in em_len..em.len() {
-        // while em.len() > em_len && em.len() > 0 {
-        if em[i] != 0u8 {
-            return false; // ErrVerification
-        }
-        if i == em_len {
-            break;
-        }
-    }
-
-    return emsa_pss_verify(digest, &em, em_bits, opts.salt_length, 32); // return emsa_pss_verify(digest, &em, em_bits, opts.salt_length, hash.New());
+    return emsa_pss_verify(digest, &em, em_bits, opts.salt_length, hasher);
 }
 
-//fn emsa_pss_verify(m_hash: &[u8], em: &[u8], em_bits: usize, mut s_len: isize, hash: hash.Hash) -> bool {
-fn emsa_pss_verify(m_hash: &[u8], em: &[u8], em_bits: usize, mut s_len: isize, hash: u16) -> bool {
-    let h_len = hash as isize; //hash.Size();
+fn emsa_pss_verify(
+    m_hash: &[u8],
+    em: &[u8],
+    em_bits: usize,
+    mut s_len: isize,
+    mut hasher: PssHash,
+) -> bool {
+    let h_len = hasher.output_size() as isize;
     if s_len == PSS_SALT_LENGTH_EQUALS_HASH {
         s_len = h_len;
     }
     let em_len = (em_bits + 7) / 8;
 
     if em_len != em.len() {
-        return false; // "rsa: internal error: inconsistent length"
+        return false;
     }
 
     // 1.  If the length of M is greater than the input limitation for the
@@ -276,10 +333,8 @@ fn emsa_pss_verify(m_hash: &[u8], em: &[u8], em_bits: usize, mut s_len: isize, h
     }
 
     // 7.  Let dbMask = MGF(H, emLen - hLen - 1).
-    //
     // 8.  Let DB = maskedDB \xor dbMask.
-    let mut hash_ = Digest::new(); // sha256
-    mgf1_xor(&mut db, &mut hash_, &h); // mgf1_xor(db, hash, h);
+    mgf1_xor(&mut db, &mut hasher, &h);
 
     // 9.  Set the leftmost 8 * emLen - emBits bits of the leftmost octet in DB
     //     to zero.
@@ -320,37 +375,32 @@ fn emsa_pss_verify(m_hash: &[u8], em: &[u8], em_bits: usize, mut s_len: isize, h
     // 11.  Let salt be the last sLen octets of DB.
     let salt = &db[db.len() - s_len..];
 
-    // 12.  Let
-    //          M' = (0x)00 00 00 00 00 00 00 00 || mHash || salt ;
-    //     M' is an octet string of length 8 + hLen + sLen with eight
-    //     initial zero octets.
-    //
-    // 13. Let H' = Hash(M'), an octet string of length hLen.
+    // 12. M' = (0x) 00 00 00 00 00 00 00 00 || mHash || salt
+    // 13. Let H' = Hash(M').
+    // mgf1_xor used the same hasher above; reset before computing H'.
+    hasher.reset();
     let prefix = [0u8; 8];
+    hasher.write(&prefix);
+    hasher.write(m_hash);
+    hasher.write(&salt);
+    let h0 = hasher.sum();
 
-    hash_.write(&prefix); // hash.Write(prefix[:]);
-    hash_.write(m_hash); // hash.Write(mHash);
-    hash_.write(&salt); // hash.Write(salt);
-
-    let h0 = hash_.sum(&[]); // let h0 = hash.Sum(nil);
-
-    // 14. If H = H', output "consistent." Otherwise, output "inconsistent."
     if h0 != h {
-        return false; // ErrVerification
+        return false;
     }
     return true;
 }
 
-// mgf1XOR XORs the bytes in out with a mask generated using the MGF1 function
-// specified in PKCS #1 v2.1.
-fn mgf1_xor(out: &mut [u8], hash: &mut Digest, seed: &[u8]) {
+// F-05: MGF1 uses the *same* hash as the PSS message hash. The hasher passed
+// in here is mutated (write/reset) per RFC 8017 Appendix B.2.1.
+fn mgf1_xor(out: &mut [u8], hash: &mut PssHash, seed: &[u8]) {
     let mut counter: [u8; 4] = [0; 4];
     let mut done = 0;
 
     while done < out.len() {
         hash.write(seed);
         hash.write(&counter);
-        let digest = hash.sum(&[]); // let digest = hash.finish().to_be_bytes(); // digest = hash.Sum(digest[:0])
+        let digest = hash.sum();
         hash.reset();
 
         for i in 0..digest.len() {

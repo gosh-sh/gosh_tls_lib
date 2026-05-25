@@ -1,5 +1,4 @@
 mod ecdsa;
-mod ed25519;
 mod rsa;
 
 //mod super::hkdf_sha256;
@@ -16,6 +15,70 @@ use num_bigint::Sign;
 
 use crate::tls_session::hkdf_sha256;
 use crate::tls_session::sha512;
+
+// F-09: RFC 6125 hostname / SAN matching.
+//
+// Returns true iff `expected` (a DNS hostname) matches `presented` (a SAN
+// dNSName entry from the leaf certificate). Comparison is ASCII case-insensitive.
+// Supports exactly one leading-label wildcard (e.g. "*.example.com"); rejects
+// non-leftmost wildcards, embedded wildcards, and partial-label wildcards.
+// Rejects any non-ASCII byte in either side to avoid IDN homograph attacks.
+fn match_dns_name(presented: &str, expected: &str) -> bool {
+    if presented.is_empty() || expected.is_empty() {
+        return false;
+    }
+    if !presented.is_ascii() || !expected.is_ascii() {
+        return false;
+    }
+    let presented = presented.trim_end_matches('.').to_ascii_lowercase();
+    let expected = expected.trim_end_matches('.').to_ascii_lowercase();
+
+    if !presented.contains('*') {
+        return presented == expected;
+    }
+    // wildcard form: must be exactly "*.<rest>"
+    let mut parts = presented.splitn(2, '.');
+    let first = match parts.next() {
+        Some(s) => s,
+        None => return false,
+    };
+    let rest = match parts.next() {
+        Some(s) => s,
+        None => return false,
+    };
+    if first != "*" {
+        return false; // partial wildcards like "foo*" or "*foo" are not allowed
+    }
+    if rest.contains('*') {
+        return false; // only the leftmost label may contain '*'
+    }
+    // expected must split into <label>.<rest>, with <rest> equal and <label> non-empty.
+    let mut e = expected.splitn(2, '.');
+    let e_label = match e.next() {
+        Some(s) => s,
+        None => return false,
+    };
+    let e_rest = match e.next() {
+        Some(s) => s,
+        None => return false,
+    };
+    if e_label.is_empty() {
+        return false;
+    }
+    e_rest == rest
+}
+
+fn hostname_matches_san(dns_names: &[String], expected_hostname: &str) -> bool {
+    if expected_hostname.is_empty() {
+        return false;
+    }
+    for name in dns_names {
+        if match_dns_name(name, expected_hostname) {
+            return true;
+        }
+    }
+    false
+}
 
 #[derive(Debug, Clone)]
 struct IpNet {
@@ -81,7 +144,6 @@ pub enum SignatureAlgorithm {
     SHA256WithRSAPSS = 13,
     SHA384WithRSAPSS = 14,
     SHA512WithRSAPSS = 15,
-    PureEd25519 = 16,
 }
 /*
 const UnknownSignatureAlgorithm: u16 = 0;
@@ -476,7 +538,6 @@ const OID_SIGNATURE_ECDSA_WITH_SHA1: [i32; 6] = [1, 2, 840, 10045, 4, 1];
 const OID_SIGNATURE_ECDSA_WITH_SHA256: [i32; 7] = [1, 2, 840, 10045, 4, 3, 2];
 const OID_SIGNATURE_ECDSA_WITH_SHA384: [i32; 7] = [1, 2, 840, 10045, 4, 3, 3];
 const OID_SIGNATURE_ECDSA_WITH_SHA512: [i32; 7] = [1, 2, 840, 10045, 4, 3, 4];
-const OID_SIGNATURE_ED25519: [i32; 4] = [1, 3, 101, 112];
 
 const OID_SHA256: [i32; 9] = [2, 16, 840, 1, 101, 3, 4, 2, 1];
 const OID_SHA384: [i32; 9] = [2, 16, 840, 1, 101, 3, 4, 2, 2];
@@ -517,7 +578,6 @@ pub enum PublicKeyAlgorithm {
     RSA = 1,
     DSA = 2,
     ECDSA = 3,
-    Ed25519 = 4,
 }
 
 impl PublicKeyAlgorithm {
@@ -529,7 +589,6 @@ impl PublicKeyAlgorithm {
             PublicKeyAlgorithm::RSA => "RSA".to_string(),
             PublicKeyAlgorithm::DSA => "DSA".to_string(),
             PublicKeyAlgorithm::ECDSA => "ECDSA".to_string(),
-            PublicKeyAlgorithm::Ed25519 => "Ed25519".to_string(),
         }
     }
 }
@@ -579,13 +638,11 @@ impl ExtKeyUsage {
 }
 
 #[derive(Debug)]
-pub struct PssParameters {
-    // The fields are not required as the default values
-    // point to SHA-1 (which is no longer suitable for use in signatures).
-    pub hash: AlgorithmIdentifier,
-    pub mgf: AlgorithmIdentifier,
-    pub salt_length: i32,
-    pub trailer_field: Option<i32>, // Optional field with default value 1
+struct PssParameters {
+    hash: AlgorithmIdentifier,
+    mgf: AlgorithmIdentifier,
+    salt_length: i32,
+    trailer_field: Option<i32>,
 }
 
 // Tag represents an ASN.1 identifier octet, consisting of a tag number
@@ -696,7 +753,7 @@ impl BitString {
 pub struct ASN1String(Vec<u8>); // Uses Vec<u8> to represent a string
 
 impl ASN1String {
-    pub fn read_asn1_bitstring(&mut self, out: &mut BitString) -> bool {
+    fn read_asn1_bitstring(&mut self, out: &mut BitString) -> bool {
         let mut bytes = ASN1String { 0: Vec::new() };
         if !self.read_asn1(&mut bytes, BIT_STRING)
             || bytes.0.is_empty()
@@ -1003,7 +1060,12 @@ impl ASN1String {
                 return false;
             }
             ret <<= 7;
-            let b: u8 = self.read(1).unwrap()[0]; // Reading one byte
+            // F-03: was `self.read(1).unwrap()[0]`; if the loop indices were
+            // ever miscomputed (or another caller mis-sets self.0), fail-closed.
+            let b: u8 = match self.read(1) {
+                Some(buf) if !buf.is_empty() => buf[0],
+                _ => return false,
+            };
 
             // ITU-T X.690, section 8.19.2:
             // The sub-identifier must be encoded in the minimum possible number of octets,
@@ -1078,7 +1140,10 @@ impl ASN1String {
         }
 
         if skip_header && !out.skip(header_len as usize) {
-            panic!("cryptobyte: internal error");
+            // F-03: was `panic!("cryptobyte: internal error")`. Fail-closed
+            // (returning false) keeps the caller's existing error path active
+            // even if the post-condition is somehow violated.
+            return false;
         }
 
         true
@@ -1093,19 +1158,9 @@ impl ASN1String {
 
         let t = String::from_utf8_lossy(&bytes.0).into_owned();
         let format_str = "%y%m%d%H%M%SZ"; // Standard UTCTime format
-        match Utc.datetime_from_str(&t, format_str) {
-            Ok(res) => {
-                // Applying additional logic for 2050 year
-                //if res.year() >= 2050 {
-                //let res = res - chrono::Duration::days(36525); // -100 years
-                //Ok(res)
-                //} else {
-                //Ok(res)
-                //}
-                Some(res)
-            }
-            Err(_) => None, //Err("Failed to parse UTCTime".to_string()),
-        }
+        // chrono 0.4: `Utc.datetime_from_str` is deprecated; use NaiveDateTime
+        // ::parse_from_str + and_utc() to land in DateTime<Utc>.
+        chrono::NaiveDateTime::parse_from_str(&t, format_str).ok().map(|n| n.and_utc())
     }
 
     // fn read_asn1_generalized_time(&mut self) -> Result<DateTime<Utc>, String> {
@@ -1117,22 +1172,17 @@ impl ASN1String {
 
         let t = String::from_utf8_lossy(&bytes.0).into_owned();
         let format_str = "%Y%m%d%H%M%S%.fZ"; // Standard GeneralizedTime format
-        match Utc.datetime_from_str(&t, format_str) {
-            Ok(res) => Some(res), //Ok(res),
-            Err(_) => None,       //Err("Failed to parse GeneralizedTime".to_string()),
-        }
+        chrono::NaiveDateTime::parse_from_str(&t, format_str).ok().map(|n| n.and_utc())
     }
 
     // Implementation of reading an unsigned integer from ASN.1
     // To simplify the implementation of the function, we assume that
     // the string is of sufficient length and returns "true" on success.
     pub fn read_unsigned(&mut self, out: &mut u32, length: usize) -> bool {
-        let v = self.read(length);
-        if v.is_none() {
-            return false;
-        }
-
-        let v = v.unwrap();
+        let v = match self.read(length) {
+            Some(v) => v,
+            None => return false,
+        };
         let mut result: u32 = 0;
 
         for byte in v {
@@ -1258,8 +1308,8 @@ pub struct Name {
     pub postal_code: Vec<String>,
     pub serial_number: String,
     pub common_name: String,
-    pub names: Vec<AttributeTypeAndValue>, // All attributes parsed
-    pub extra_names: Vec<AttributeTypeAndValue>, // Attributes copied to any serialized names
+    pub(crate) names: Vec<AttributeTypeAndValue>, // All attributes parsed
+    pub(crate) extra_names: Vec<AttributeTypeAndValue>, // Attributes copied to any serialized names
 }
 
 impl Name {
@@ -1282,7 +1332,7 @@ impl Name {
     // FillFromRDNSequence populates Name from the provided [RDNSequence].
     // Multi-entry RDNs are flattened, all entries are added to the
     // relevant Name's fields, and the grouping is not preserved.
-    pub fn fill_from_rdn_sequence(&mut self, rdns: &Vec<Vec<AttributeTypeAndValue>>) {
+    pub(crate) fn fill_from_rdn_sequence(&mut self, rdns: &Vec<Vec<AttributeTypeAndValue>>) {
         for rdn in rdns {
             if rdn.is_empty() {
                 continue;
@@ -1395,31 +1445,33 @@ impl Certificate {
             return false; //return ErrUnsupportedAlgorithm
         }
 
-        // return checkSignature(c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature, parent.PublicKey, false);
         return check_signature(
             &self.signature_algorithm,
             &self.raw_tbs_certificate,
             &self.signature,
             &parent.public_key,
-            false,
         );
     }
 }
 
-// CheckSignature verifies that signature is a valid signature over signed from
-// c's public key.
-//
-// This is a low-level API that performs no validity checks on the certificate.
-//
-// [MD5WithRSA] signatures are rejected, while [SHA1WithRSA] and [ECDSAWithSHA1]
-// signatures are currently accepted.
+// F-15.11: SHA-1 and MD5 signatures are hard-rejected. The old API took an
+// `allow_sha1: bool` parameter that was never read (Clippy: unused_variable);
+// removed to make the policy unambiguous.
 fn check_signature(
     algo: &SignatureAlgorithm,
     signed: &Vec<u8>,
     signature: &Vec<u8>,
     public_key: &PublicKey,
-    allow_sha1: bool,
 ) -> bool {
+    match algo {
+        SignatureAlgorithm::SHA1WithRSA
+        | SignatureAlgorithm::ECDSAWithSHA1
+        | SignatureAlgorithm::MD2WithRSA
+        | SignatureAlgorithm::MD5WithRSA
+        | SignatureAlgorithm::DSAWithSHA1
+        | SignatureAlgorithm::DSAWithSHA256 => return false,
+        _ => {}
+    }
     let signature_algorithm_details: Vec<AlgorithmDetails> = vec![
         AlgorithmDetails {
             algo: SignatureAlgorithm::MD2WithRSA,
@@ -1526,13 +1578,6 @@ fn check_signature(
             pub_key_algo: PublicKeyAlgorithm::ECDSA,
             hash: Some(String::from("SHA512")),
         },
-        AlgorithmDetails {
-            algo: SignatureAlgorithm::PureEd25519,
-            name: String::from("Ed25519"),
-            oid: OID_SIGNATURE_ED25519.to_vec(),
-            pub_key_algo: PublicKeyAlgorithm::Ed25519,
-            hash: Some(String::from("")),
-        },
     ];
 
     let mut hash_type = None;
@@ -1546,27 +1591,20 @@ fn check_signature(
         }
     }
 
-    //match hash_type.unwrap() {
-    //"SHA256" => {
-    //signed = hkdf_sha256::sum256(signed);
-    //}
-    //}
-    let hash_type_str = hash_type.unwrap();
-    let mut hash_len_in_bits: usize = 0;
-    let hashed = match hash_type_str.as_str() {
-        "SHA256" => {
-            hash_len_in_bits = 256;
-            hkdf_sha256::sum256(signed).to_vec()
-        }
-        "SHA384" => {
-            hash_len_in_bits = 384;
-            sha512::sum384(signed).to_vec()
-        }
-        "SHA512" => {
-            hash_len_in_bits = 512;
-            sha512::sum512(signed).to_vec()
-        }
-        _ => return false, //panic!("unknown hash type"),
+    // F-03: hash_type is None for SHA-1 / MD2 / MD5 (already rejected above)
+    // and for Ed25519 (which we removed). If somehow None reaches here, refuse
+    // the signature instead of panicking.
+    let hash_type_str = match hash_type {
+        Some(s) => s,
+        None => return false,
+    };
+    // F-15.2: was `let mut hash_len_in_bits: usize = 0;` followed by per-arm
+    // overwrites — dead store. Emit the (hash, bits) pair from the match arm.
+    let (hashed, hash_len_in_bits): (Vec<u8>, usize) = match hash_type_str.as_str() {
+        "SHA256" => (hkdf_sha256::sum256(signed).to_vec(), 256),
+        "SHA384" => (sha512::sum384(signed).to_vec(), 384),
+        "SHA512" => (sha512::sum512(signed).to_vec(), 512),
+        _ => return false,
     };
 
     //match hash_type.unwrap() {
@@ -1601,15 +1639,6 @@ fn check_signature(
             }
             if !ecdsa_verify_asn1(ecdsa_pub_key, &hashed, signature) {
                 return false; // "x509: ECDSA verification failure")
-            }
-            return true;
-        }
-        PublicKey::ED25519PublicKey(ed25519_pub_key) => {
-            if pub_key_algo != PublicKeyAlgorithm::Ed25519 {
-                return false;
-            }
-            if !ed25519::verify(ed25519_pub_key, &hashed, signature) {
-                return false; // "x509: Ed25519 verification failure")
             }
             return true;
         }
@@ -1740,22 +1769,16 @@ pub fn parse_name_constraints_extension(out: &mut Certificate, e: &Extension) ->
                         dns_names.push(domain);
                     }
                     IP_TAG => {
-                        let l = value.0.len();
-                        let mut ip: Vec<u8> = Vec::new();
-                        let mut mask: Vec<u8> = Vec::new();
-                        match l {
-                            8 => {
-                                ip = value.0[..4].to_vec();
-                                mask = value.0[4..].to_vec();
-                            }
-                            32 => {
-                                ip = value.0[..16].to_vec();
-                                mask = value.0[16..].to_vec();
-                            }
-                            _ => return None, // "x509: IP constraint contained value of length {}", l
-                        }
+                        // F-15.4: emit (ip, mask) from the match instead of
+                        // declaring empty mut vecs that get rebound — dead
+                        // stores hide assignment-removal bugs.
+                        let (ip, mask): (Vec<u8>, Vec<u8>) = match value.0.len() {
+                            8 => (value.0[..4].to_vec(), value.0[4..].to_vec()),
+                            32 => (value.0[..16].to_vec(), value.0[16..].to_vec()),
+                            _ => return None,
+                        };
                         if !is_valid_ip_mask(&mask) {
-                            return None; //
+                            return None;
                         }
                         ips.push(IpNet { ip, mask });
                     }
@@ -1806,26 +1829,20 @@ pub fn parse_name_constraints_extension(out: &mut Certificate, e: &Extension) ->
             return Some((dns_names, ips, emails, uri_domains));
         };
 
-    let result = get_values(&mut permitted);
-    if result.is_none() {
-        return None;
-    } else {
-        out.permitted_dns_domains = result.clone().unwrap().0;
-        out.permitted_ip_ranges = result.clone().unwrap().1;
-        out.permitted_email_addresses = result.clone().unwrap().2;
-        out.permitted_uri_domains = result.clone().unwrap().3;
-        //return Some(false); // unhandled = false
-    }
-    let result = get_values(&mut excluded);
-    if result.is_none() {
-        return None;
-    } else {
-        out.excluded_dns_domains = result.clone().unwrap().0;
-        out.excluded_ip_ranges = result.clone().unwrap().1;
-        out.excluded_email_addresses = result.clone().unwrap().2;
-        out.excluded_uri_domains = result.clone().unwrap().3;
-    }
-    out.permitted_dns_domains_critical = e.critical; // out.permitted_dns_domains_critical = e.critical.unwrap();
+    // F-03: was 4× `.unwrap()` per arm — bind once and destructure.
+    let (dns, ips, emails, uris) = get_values(&mut permitted)?;
+    out.permitted_dns_domains = dns;
+    out.permitted_ip_ranges = ips;
+    out.permitted_email_addresses = emails;
+    out.permitted_uri_domains = uris;
+
+    let (dns, ips, emails, uris) = get_values(&mut excluded)?;
+    out.excluded_dns_domains = dns;
+    out.excluded_ip_ranges = ips;
+    out.excluded_email_addresses = emails;
+    out.excluded_uri_domains = uris;
+
+    out.permitted_dns_domains_critical = e.critical;
 
     return Some(unhandled);
 }
@@ -1835,19 +1852,33 @@ fn process_extensions(out: &mut Certificate) -> bool {
         let mut unhandled = false;
 
         if e.id.len() == 4 && e.id[0] == 2 && e.id[1] == 5 && e.id[2] == 29 {
+            // F-03: every extension parser below used to `.unwrap()` on
+            // attacker-controlled DER. Fail-closed on any parse error — the
+            // cert as a whole is rejected by the caller.
             match e.id[3] {
                 15 => {
-                    out.key_usage = parse_key_usage_extension(&e.value).unwrap(); //out.key_usage = Some(KeyUsage::parse(&e.value)?);
+                    let ku = match parse_key_usage_extension(&e.value) {
+                        Some(k) => k,
+                        None => return false,
+                    };
+                    out.key_usage = ku;
                 }
                 19 => {
-                    out.is_ca = parse_basic_constraints_extension(&e.value).unwrap().0;
-                    out.max_path_len = parse_basic_constraints_extension(&e.value).unwrap().1;
+                    let bc = match parse_basic_constraints_extension(&e.value) {
+                        Some(b) => b,
+                        None => return false,
+                    };
+                    out.is_ca = bc.0;
+                    out.max_path_len = bc.1;
                     out.basic_constraints_valid = true;
                     out.max_path_len_zero = out.max_path_len == 0;
                 }
                 17 => {
                     let (dns_names, email_addresses, ip_addresses, uris) =
-                        parse_san_extension(&e.value).unwrap();
+                        match parse_san_extension(&e.value) {
+                            Some(v) => v,
+                            None => return false,
+                        };
                     out.dns_names = dns_names;
                     out.email_addresses = email_addresses;
                     out.ip_addresses = ip_addresses;
@@ -1862,7 +1893,10 @@ fn process_extensions(out: &mut Certificate) -> bool {
                     }
                 }
                 30 => {
-                    unhandled = parse_name_constraints_extension(out, &e).unwrap(); //parse_name_constraints_extension(out, e)?;
+                    unhandled = match parse_name_constraints_extension(out, &e) {
+                        Some(u) => u,
+                        None => return false,
+                    };
                 }
                 31 => {
                     // Handle CRLDistributionPoints
@@ -1942,12 +1976,10 @@ fn process_extensions(out: &mut Certificate) -> bool {
                     }
                 }
                 37 => {
-                    let parse_result = parse_ext_key_usage_extension(&e.value);
-                    if !parse_result.is_none() {
-                        out.ext_key_usage = parse_result.clone().unwrap().0;
-                        out.unknown_ext_key_usage = parse_result.clone().unwrap().1;
+                    if let Some((eku, unknown_eku)) = parse_ext_key_usage_extension(&e.value) {
+                        out.ext_key_usage = eku;
+                        out.unknown_ext_key_usage = unknown_eku;
                     }
-                    //out.ExtKeyUsage, out.UnknownExtKeyUsage, err = parse_ext_key_usage_extension(e.Value);
                 }
                 14 => {
                     // RFC 5280, 4.2.1.2
@@ -1999,7 +2031,12 @@ fn process_extensions(out: &mut Certificate) -> bool {
                 if !aia_der.read_asn1(&mut aia_der_, context_specific(6u8)) {
                     return false; // "x509: invalid authority info access"
                 }
-                let method_slice: [i32; 9] = method.as_slice().try_into().unwrap();
+                // F-03: a malformed AIA OID can have any length; only the
+                // 9-element OIDs match the known constants, others ignored.
+                let method_slice: [i32; 9] = match method.as_slice().try_into() {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
                 match method_slice {
                     OID_AUTHORITY_INFO_ACCESS_OCSP => {
                         out.ocsp_server.push(String::from_utf8_lossy(&aia_der_.0).to_string());
@@ -2149,7 +2186,7 @@ pub fn parse_certificate(der: &[u8]) -> Result<Certificate, Vec<u8>> {
         return Err(vec![0u8, 21u8, 8u8]); // panic!("x509: inner and outer signature algorithm identifiers don't match");
     }
 
-    let sig_ai = parse_ai(&mut sig_ai_seq);
+    let sig_ai = parse_ai(&mut sig_ai_seq).ok_or_else(|| vec![0u8, 21u8, 7u8])?;
     cert.signature_algorithm = get_signature_algorithm_from_ai(sig_ai);
 
     let mut issuer_seq = ASN1String { 0: Vec::new() };
@@ -2158,22 +2195,33 @@ pub fn parse_certificate(der: &[u8]) -> Result<Certificate, Vec<u8>> {
         return Err(vec![0u8, 21u8, 9u8]); // panic!("x509: malformed issuer");
     }
     cert.raw_issuer = issuer_seq.0.clone();
-    let issuer_rdns = parse_name(&mut issuer_seq);
+    let issuer_rdns = match parse_name(&mut issuer_seq) {
+        Some(r) => r,
+        None => return Err(vec![0u8, 21u8, 9u8]), // malformed issuer
+    };
     cert.issuer.fill_from_rdn_sequence(&issuer_rdns);
 
     let mut validity = ASN1String { 0: Vec::new() };
     if !tbs1.read_asn1(&mut validity, SEQUENCE) {
-        return Err(vec![0u8, 21u8, 10u8]); // panic!("x509: malformed validity");
+        return Err(vec![0u8, 21u8, 10u8]);
     }
 
-    (cert.not_before, cert.not_after) = parse_validity(&mut validity).unwrap();
+    let (nb, na) = match parse_validity(&mut validity) {
+        Some(v) => v,
+        None => return Err(vec![0u8, 21u8, 10u8]),
+    };
+    cert.not_before = nb;
+    cert.not_after = na;
 
     let mut subject_seq = ASN1String { 0: Vec::new() };
     if !tbs1.read_asn1_element(&mut subject_seq, SEQUENCE) {
-        return Err(vec![0u8, 21u8, 9u8]); // panic!("x509: malformed issuer");
+        return Err(vec![0u8, 21u8, 9u8]);
     }
     cert.raw_subject = subject_seq.0.clone();
-    let subject_rdns = parse_name(&mut subject_seq);
+    let subject_rdns = match parse_name(&mut subject_seq) {
+        Some(r) => r,
+        None => return Err(vec![0u8, 21u8, 9u8]),
+    };
 
     cert.subject.fill_from_rdn_sequence(&subject_rdns);
 
@@ -2191,10 +2239,7 @@ pub fn parse_certificate(der: &[u8]) -> Result<Certificate, Vec<u8>> {
         return Err(vec![0u8, 21u8, 11u8]); // panic!("x509: malformed public key algorithm identifier");
     }
 
-    let pk_ai = parse_ai(&mut pk_ai_seq); //pkAI, err := parseAI(pkAISeq)
-    //if err != nil {
-    //return nil, err
-    //}
+    let pk_ai = parse_ai(&mut pk_ai_seq).ok_or_else(|| vec![0u8, 21u8, 11u8])?;
     cert.public_key_algorithm = get_public_key_algorithm_from_oid(&pk_ai.algorithm);
     let mut spk = BitString { bytes: Vec::new(), bit_length: 0 }; //var spk asn1.BitString
     if !spki1.read_asn1_bitstring(&mut spk) {
@@ -2202,15 +2247,7 @@ pub fn parse_certificate(der: &[u8]) -> Result<Certificate, Vec<u8>> {
     }
     if cert.public_key_algorithm != PublicKeyAlgorithm::UnknownPublicKeyAlgorithm {
         let public_key_info = PublicKeyInfo { raw: Vec::new(), algorithm: pk_ai, public_key: spk };
-
-        let parse_pk_res = parse_public_key(&public_key_info);
-
-        if parse_pk_res.is_err() {
-            return Err(parse_pk_res.err().unwrap());
-        }
-
-        cert.public_key = parse_pk_res.unwrap();
-        //cert.public_key = parse_public_key(&public_key_info);
+        cert.public_key = parse_public_key(&public_key_info)?;
     }
 
     if cert.version > 1 {
@@ -2244,14 +2281,14 @@ pub fn parse_certificate(der: &[u8]) -> Result<Certificate, Vec<u8>> {
                     if !extensions1.read_asn1(&mut extension, SEQUENCE) {
                         return Err(vec![0u8, 21u8, 14u8]); // panic!("x509: malformed extension");
                     }
-                    let ext = parse_extension(&mut extension); //ext, err := parseExtension(extension)
-                    //if err != nil {
-                    //return nil, err
-                    //}
+                    let ext = match parse_extension(&mut extension) {
+                        Some(e) => e,
+                        None => return Err(vec![0u8, 21u8, 14u8]),
+                    };
 
-                    let oid_str = to_oid_string(&ext.id); //oidStr := ext.Id.String()
-                    if !seen_exts.get(&oid_str).is_none() {
-                        return Err(vec![0u8, 21u8, 15u8]); // panic!("x509: certificate contains duplicate extensions");
+                    let oid_str = to_oid_string(&ext.id);
+                    if seen_exts.contains_key(&oid_str) {
+                        return Err(vec![0u8, 21u8, 15u8]); // duplicate extension
                     }
                     //if seenExts[oidStr] {
                     //return nil, errors.New("x509: certificate contains duplicate extensions")
@@ -2304,52 +2341,48 @@ struct AttributeTypeAndValue {
 //Vec<AttributeTypeAndValue>,
 //);
 
-// parseName parses a DER encoded Name as defined in RFC 5280. We may
-// want to export this function in the future for use in crypto/tls.
-pub fn parse_name(raw: &mut ASN1String) -> Vec<Vec<AttributeTypeAndValue>> {
-    // pub fn parse_name(raw: &mut ASN1String) -> RDN_sequence {
-    //
+// parseName parses a DER-encoded Name as defined in RFC 5280.
+//
+// F-03: every step here is reachable from a malformed peer certificate. The
+// function returns Option<...> (None on any parse failure) instead of panic.
+fn parse_name(raw: &mut ASN1String) -> Option<Vec<Vec<AttributeTypeAndValue>>> {
     let mut der = ASN1String { 0: Vec::new() };
     if !raw.read_asn1(&mut der, SEQUENCE) {
-        panic!("x509: invalid RDNSequence");
+        return None;
     }
 
-    let mut rdn_seq: Vec<Vec<AttributeTypeAndValue>> = Vec::new(); // let mut rdn_seq: RDNSequence;
+    let mut rdn_seq: Vec<Vec<AttributeTypeAndValue>> = Vec::new();
     while !der.0.is_empty() {
-        let mut rdn_set: Vec<AttributeTypeAndValue> = Vec::new(); // let mut rdn_set: RelativeDistinguishedNameSET;
+        let mut rdn_set: Vec<AttributeTypeAndValue> = Vec::new();
         let mut set = ASN1String { 0: Vec::new() };
         if !der.read_asn1(&mut set, SET) {
-            //return nil, errors.New("x509: invalid RDNSequence")
-            panic!("x509: invalid RDNSequence");
+            return None;
         }
 
         while !set.0.is_empty() {
             let mut atav = ASN1String { 0: Vec::new() };
             if !set.read_asn1(&mut atav, SEQUENCE) {
-                panic!("x509: invalid RDNSequence: invalid attribute");
+                return None;
             }
 
-            let mut attr: AttributeTypeAndValue =
-                AttributeTypeAndValue { atype: Vec::new(), value: String::new() };
+            let mut attr = AttributeTypeAndValue { atype: Vec::new(), value: String::new() };
             if !atav.read_asn1_object_identifier(&mut attr.atype) {
-                panic!("x509: invalid RDNSequence: invalid attribute type");
+                return None;
             }
 
             let mut raw_value = ASN1String { 0: Vec::new() };
             let mut value_tag = 0u8;
             if !atav.read_any_asn1(&mut raw_value, &mut value_tag) {
-                panic!("x509: invalid RDNSequence: invalid attribute value");
+                return None;
             }
 
-            attr.value = parse_asn1_string(value_tag, &raw_value.0)
-                .expect("x509: invalid RDNSequence: invalid attribute value: %s");
-
+            attr.value = parse_asn1_string(value_tag, &raw_value.0)?;
             rdn_set.push(attr);
         }
         rdn_seq.push(rdn_set);
     }
 
-    return rdn_seq;
+    Some(rdn_seq)
 }
 
 // pub fn parse_asn1_string(tag: u8, value: &[u8]) -> Result<String, ASN1Error> {
@@ -2535,7 +2568,9 @@ struct AlgorithmIdentifier {
     parameters: Option<RawValue>,
 }
 
-pub fn parse_ai(der: &mut ASN1String) -> AlgorithmIdentifier {
+// F-03: parse_ai is reachable from parse_certificate on every cert. Malformed
+// OID or parameters used to panic; now we surface None.
+fn parse_ai(der: &mut ASN1String) -> Option<AlgorithmIdentifier> {
     let mut algorithm: Vec<i32> = Vec::new();
 
     let mut parameters = RawValue {
@@ -2547,35 +2582,27 @@ pub fn parse_ai(der: &mut ASN1String) -> AlgorithmIdentifier {
     };
 
     if !der.read_asn1_object_identifier(&mut algorithm) {
-        panic!("x509: malformed OID");
+        return None;
     }
 
     if der.0.is_empty() {
-        return AlgorithmIdentifier { algorithm, parameters: Some(parameters) };
+        return Some(AlgorithmIdentifier { algorithm, parameters: Some(parameters) });
     }
 
     let mut params = ASN1String { 0: Vec::new() };
     let mut tag = 0u8;
 
     if !der.read_any_asn1_element(&mut params, &mut tag) {
-        panic!("x509: malformed parameters");
+        return None;
     }
 
     parameters.tag = tag as i32;
     parameters.full_bytes = params.0.to_vec();
 
-    return AlgorithmIdentifier { algorithm, parameters: Some(parameters) };
+    Some(AlgorithmIdentifier { algorithm, parameters: Some(parameters) })
 }
 
 fn get_signature_algorithm_from_ai(ai: AlgorithmIdentifier) -> SignatureAlgorithm {
-    if ai.algorithm == OID_SIGNATURE_ED25519.to_vec() {
-        // RFC 8410, Section 3
-        // > For all of the OIDs, the parameters MUST be absent.
-        if ai.parameters.unwrap().full_bytes.len() != 0 {
-            return SignatureAlgorithm::UnknownSignatureAlgorithm;
-        }
-    }
-
     let signature_algorithm_details: Vec<AlgorithmDetails> = vec![
         AlgorithmDetails {
             algo: SignatureAlgorithm::MD2WithRSA,
@@ -2682,13 +2709,6 @@ fn get_signature_algorithm_from_ai(ai: AlgorithmIdentifier) -> SignatureAlgorith
             pub_key_algo: PublicKeyAlgorithm::ECDSA,
             hash: Some(String::from("SHA512")),
         },
-        AlgorithmDetails {
-            algo: SignatureAlgorithm::PureEd25519,
-            name: String::from("Ed25519"),
-            oid: OID_SIGNATURE_ED25519.to_vec(),
-            pub_key_algo: PublicKeyAlgorithm::Ed25519,
-            hash: Some(String::from("")),
-        },
     ];
 
     if ai.algorithm != OID_SIGNATURE_RSA_PSS.to_vec() {
@@ -2757,7 +2777,6 @@ const OID_PUBLIC_KEY_ECDSA: [i32; 6] = [1, 2, 840, 10045, 2, 1];
 //	id-X25519    OBJECT IDENTIFIER ::= { 1 3 101 110 }
 //	id-Ed25519   OBJECT IDENTIFIER ::= { 1 3 101 112 }
 const OID_PUBLIC_KEY_X25519: [i32; 4] = [1, 3, 101, 110];
-const OID_PUBLIC_KEY_ED25519: [i32; 4] = [1, 3, 101, 112];
 
 fn get_public_key_algorithm_from_oid(oid: &Vec<i32>) -> PublicKeyAlgorithm {
     let oid_slice = oid.as_slice();
@@ -2765,7 +2784,6 @@ fn get_public_key_algorithm_from_oid(oid: &Vec<i32>) -> PublicKeyAlgorithm {
         val if val == OID_PUBLIC_KEY_RSA.as_slice() => PublicKeyAlgorithm::RSA,
         val if val == OID_PUBLIC_KEY_DSA.as_slice() => PublicKeyAlgorithm::DSA,
         val if val == OID_PUBLIC_KEY_ECDSA.as_slice() => PublicKeyAlgorithm::ECDSA,
-        val if val == OID_PUBLIC_KEY_ED25519.as_slice() => PublicKeyAlgorithm::Ed25519,
         _ => PublicKeyAlgorithm::UnknownPublicKeyAlgorithm,
     }
 }
@@ -2836,18 +2854,10 @@ fn parse_field(v: &mut dyn std::any::Any, bytes: &[u8], init_offset: usize, para
     Some((offset, bytes))
 }*/
 
-// fn parse_validity(der: &mut ASN1String) -> Option<(u64, u64)> {
 fn parse_validity(der: &mut ASN1String) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-    let not_before = parse_time(der);
-    if not_before.is_none() {
-        return None;
-    }
-    let not_after = parse_time(der);
-    if not_after.is_none() {
-        return None;
-    }
-
-    return Some((not_before.unwrap(), not_after.unwrap()));
+    let not_before = parse_time(der)?;
+    let not_after = parse_time(der)?;
+    Some((not_before, not_after))
 }
 
 fn parse_time(der: &mut ASN1String) -> Option<DateTime<Utc>> {
@@ -2860,25 +2870,25 @@ fn parse_time(der: &mut ASN1String) -> Option<DateTime<Utc>> {
     }
 }
 
-fn parse_extension(der: &mut ASN1String) -> Extension {
-    // fn parse_extension(der: &mut ASN1String) -> (pkix.Extension, error) {
-    let mut ext: Extension = Extension { id: vec![], critical: false, value: vec![] };
+// F-03: callers used to panic on a malformed extension. Return Option<...>.
+fn parse_extension(der: &mut ASN1String) -> Option<Extension> {
+    let mut ext = Extension { id: vec![], critical: false, value: vec![] };
     if !der.read_asn1_object_identifier(&mut ext.id) {
-        panic!("x509: malformed extension OID field");
+        return None;
     }
     let mut ext_critical = false;
     if der.peek_asn1_tag(BOOLEAN) {
         if !der.read_asn1_boolean(&mut ext_critical) {
-            panic!("x509: malformed extension critical field");
+            return None;
         }
     }
     ext.critical = ext_critical;
     let mut val = ASN1String { 0: Vec::new() };
     if !der.read_asn1(&mut val, OCTET_STRING) {
-        panic!("x509: malformed extension value field");
+        return None;
     }
     ext.value = val.0;
-    return ext;
+    Some(ext)
 }
 
 struct PublicKeyInfo {
@@ -2891,7 +2901,6 @@ struct PublicKeyInfo {
 enum PublicKey {
     RsaPublicKey(rsa::PublicKey),
     ECDSAPublicKey(ecdsa::PublicKey),
-    ED25519PublicKey(ed25519::PublicKey),
     X25519PublicKey,
     DsaPublicKey,
     UnknownPubicKey,
@@ -2941,7 +2950,16 @@ fn named_curve_from_oid(oid: &Vec<i32>) -> Option<ecdsa::Curve> {
 
 fn parse_public_key(key_data: &PublicKeyInfo) -> Result<PublicKey, Vec<u8>> {
     let oid = &key_data.algorithm.algorithm;
-    let params = key_data.algorithm.parameters.clone().unwrap().clone();
+    // F-03: parameters is Option<RawValue>; a malformed AlgorithmIdentifier
+    // could legitimately omit them. Fall back to an empty RawValue rather
+    // than unwrap.
+    let params = key_data.algorithm.parameters.clone().unwrap_or(RawValue {
+        class: 0,
+        tag: 0,
+        is_compound: false,
+        bytes: Vec::new(),
+        full_bytes: Vec::new(),
+    });
     let mut der = ASN1String { 0: key_data.public_key.right_align() }; // der = cryptobyte.String(key_data.publicKey.right_align() );
     match oid.as_slice() {
         val if val == OID_PUBLIC_KEY_RSA.as_slice() => {
@@ -2993,18 +3011,6 @@ fn parse_public_key(key_data: &PublicKeyInfo) -> Result<PublicKey, Vec<u8>> {
                 }
                 None => return Err(vec![0u8, 21u8, 39u8]), //panic!("x509: unsupported elliptic curve"),
             }
-        }
-        val if val == OID_PUBLIC_KEY_ED25519.as_slice() => {
-            // RFC 8410, Section 3
-            // > For all of the OIDs, the parameters MUST be absent.
-            if !params.full_bytes.is_empty() {
-                return Err(vec![0u8, 21u8, 40u8]); //panic!("x509: Ed25519 key encoded with illegal parameters");
-            }
-            if der.0.len() != ed25519::PUBLIC_KEY_SIZE {
-                return Err(vec![0u8, 21u8, 41u8]); //panic!("x509: wrong Ed25519 public key size");
-            }
-
-            Ok(PublicKey::ED25519PublicKey(ed25519::PublicKey(der.0)))
         }
         val if val == OID_PUBLIC_KEY_X25519.as_slice() => Ok(PublicKey::X25519PublicKey),
         val if val == OID_PUBLIC_KEY_DSA.as_slice() => Ok(PublicKey::DsaPublicKey),
@@ -3072,9 +3078,11 @@ where
         if !der.read_any_asn1(&mut san, &mut tag) {
             return false; // "invalid subject alternative names"
         }
-        if let success = callback(0x80, &san) {
-            // if let Err(err) = callback(tag ^ 0x80, &san) {
-            return success; // return Err(err);
+        // Strip the ASN.1 class bits; SAN entries are context-specific so the
+        // raw tag is e.g. 0x82 for dNSName (type 2). Callers expect the bare
+        // type number.
+        if !callback(tag & 0x1f, &san) {
+            return false;
         }
     }
     return true;
@@ -3125,16 +3133,18 @@ pub fn parse_san_extension(
                 uris.push(uri_str);
             }
             NAME_TYPE_IP => {
+                // F-03: explicit Result handling instead of unwrap; the len
+                // match already guarantees success but Clippy flags unwrap.
                 let ip = match data.0.len() {
-                    4 => {
-                        let ip_bytes: [u8; 4] = data.0.clone().try_into().unwrap();
-                        IpAddr::from(ip_bytes)
-                    }
-                    16 => {
-                        let ip_bytes: [u8; 16] = data.0.clone().try_into().unwrap();
-                        IpAddr::from(ip_bytes)
-                    }
-                    _ => return false, //return Err(format!("cannot parse IP address of length {}", data.len()).into()),
+                    4 => match <[u8; 4]>::try_from(data.0.as_slice()) {
+                        Ok(b) => IpAddr::from(b),
+                        Err(_) => return false,
+                    },
+                    16 => match <[u8; 16]>::try_from(data.0.as_slice()) {
+                        Ok(b) => IpAddr::from(b),
+                        Err(_) => return false,
+                    },
+                    _ => return false,
                 };
                 ip_addresses.push(ip);
             }
@@ -3166,11 +3176,9 @@ fn parse_ext_key_usage_extension(der_bytes: &Vec<u8>) -> Option<(Vec<ExtKeyUsage
             return None; // "x509: invalid extended key usages"
         }
 
-        let ext_key_usage_result = ext_key_usage_from_oid(&eku[..]);
-        if ext_key_usage_result.is_none() {
-            unknown_usages.push(eku);
-        } else {
-            ext_key_usages.push(ext_key_usage_result.unwrap());
+        match ext_key_usage_from_oid(&eku[..]) {
+            Some(usage) => ext_key_usages.push(usage),
+            None => unknown_usages.push(eku),
         }
     }
     return Some((ext_key_usages, unknown_usages));
@@ -3191,12 +3199,8 @@ fn parse_certificate_policies_extension(der_bytes: &Vec<u8>) -> Option<Vec<Vec<u
         if !der.read_asn1(&mut cp, SEQUENCE) || !cp.read_asn1(&mut oid_bytes, OBJECT_IDENTIFIER) {
             return None; // "x509: invalid certificate policies"
         }
-        let oid_wrapper = OID::new_oid_from_der(&oid_bytes.0); // oid, ok := newOIDFromDER(OIDBytes)
-        if oid_wrapper.is_none() {
-            return None; // "x509: invalid certificate policies"
-        }
-        oids.push(oid_wrapper.unwrap().der);
-        //oids = append(oids, oid)
+        let oid = OID::new_oid_from_der(&oid_bytes.0)?;
+        oids.push(oid.der);
     }
     return Some(oids);
 }
@@ -3323,15 +3327,19 @@ pub fn ext_key_usage_from_oid(oid: &[i32]) -> Option<ExtKeyUsage> {
     None
 }
 
-pub fn check_certs(
+fn check_certs(
     current_time: i64,
     check_sum: &[u8],
     certs_chain: &[u8],
     signature: &[u8],
+    expected_hostname: &str,
+    signature_hash_bits: usize,
 ) -> Option<PublicKey> {
-    // extract
-    // divide input string into three slices
-
+    // F-03: every multi-byte read from certs_chain below was naked indexing.
+    // A truncated chain would panic before getting to the validity checks.
+    if certs_chain.len() < 6 {
+        return None;
+    }
     let len_of_certs_chain = (certs_chain[0] as usize) * 65536
         + (certs_chain[1] as usize) * 256
         + (certs_chain[2] as usize);
@@ -3344,9 +3352,12 @@ pub fn check_certs(
         + (certs_chain[4] as usize) * 256
         + (certs_chain[5] as usize);
 
+    if 6 + len_of_leaf_cert > certs_chain.len() {
+        return None;
+    }
     let leaf_cert_slice = &certs_chain[6..len_of_leaf_cert + 6];
 
-    let mut leaf_cert = parse_certificate(leaf_cert_slice).unwrap(); // leafCert, err := x509.ParseCertificate(leafCertSlice)
+    let mut leaf_cert = parse_certificate(leaf_cert_slice).ok()?;
 
     if leaf_cert.not_after.timestamp() < current_time
         || leaf_cert.not_before.timestamp() > current_time
@@ -3354,14 +3365,25 @@ pub fn check_certs(
         return None;
     }
 
+    // F-09: enforce SAN matching against the expected hostname (RFC 6125).
+    if !hostname_matches_san(&leaf_cert.dns_names, expected_hostname) {
+        return None;
+    }
+
     let start_index = len_of_leaf_cert + 8;
+    if start_index + 3 > certs_chain.len() {
+        return None;
+    }
     let len_of_internal_cert = (certs_chain[start_index] as usize) * 65536
         + (certs_chain[start_index + 1] as usize) * 256
         + (certs_chain[start_index + 2] as usize);
 
+    if start_index + 3 + len_of_internal_cert > certs_chain.len() {
+        return None;
+    }
     let internal_cert_slice = &certs_chain[start_index + 3..start_index + len_of_internal_cert + 3];
 
-    let mut internal_cert = parse_certificate(internal_cert_slice).unwrap(); // internalCert, err := x509.ParseCertificate(internalCertSlice)
+    let mut internal_cert = parse_certificate(internal_cert_slice).ok()?;
 
     if internal_cert.not_after.timestamp() < current_time
         || internal_cert.not_before.timestamp() > current_time
@@ -3369,24 +3391,38 @@ pub fn check_certs(
         return None;
     }
 
-    let start_index = start_index + 3 + len_of_internal_cert + 2;
+    // F-02: trust anchor MUST come from local pinned roots, not from the wire.
+    // We ignore any third certificate the server included in its chain.
+    let known_root_certs: [&[u8]; 7] = [
+        &ROOT_FACEBOOK_CERT_1,
+        &ROOT_FACEBOOK_CERT_2,
+        &ROOT_GOOGLE_CERT_G1,
+        &ROOT_GOOGLE_CERT_G2,
+        &ROOT_GOOGLE_CERT_G3,
+        &ROOT_GOOGLE_CERT_G4,
+        &ROOT_KAKAO_CERT,
+    ];
 
-    let root_cert = if start_index + 2 < certs_chain.len() {
-        let len_of_root_cert = (certs_chain[start_index] as usize) * 65536
-            + (certs_chain[start_index + 1] as usize) * 256
-            + (certs_chain[start_index + 2] as usize);
-        let root_cert_slice = &certs_chain[start_index + 3..start_index + len_of_root_cert + 3];
-        //let root_cert = parse_certificate(root_cert_slice);
-        parse_certificate(root_cert_slice).unwrap()
-    } else {
-        parse_certificate(&ROOT_FACEBOOK_CERT_2).unwrap() // parse_certificate(&ROOT_FACEBOOK_CERT)
-    };
-
-    if root_cert.not_after.timestamp() < current_time
-        || root_cert.not_before.timestamp() > current_time
-    {
-        return None;
+    let mut anchor: Option<Certificate> = None;
+    for raw in known_root_certs {
+        let candidate = match parse_certificate(raw) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if candidate.not_after.timestamp() < current_time
+            || candidate.not_before.timestamp() > current_time
+        {
+            continue;
+        }
+        if internal_cert.check_signature_from(&candidate) {
+            anchor = Some(candidate);
+            break;
+        }
     }
+    let root_cert = match anchor {
+        Some(c) => c,
+        None => return None,
+    };
 
     //let context: [u8; 98] = [32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
     //32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
@@ -3404,89 +3440,60 @@ pub fn check_certs(
      233, 97, 35, 201, 235, 108, 194, 134, 245, 202, 164, 37, 79, 5, 163, 96, 180, 148];*/
 
     if !leaf_cert.check_signature_from(&internal_cert) {
-        panic!("leaf_cert.check_signature_from(&internal_cert)"); //return None;
+        return None;
     }
 
-    if !internal_cert.check_signature_from(&root_cert) {
-        // add all roots certs by digi_certs
-        let known_root_certs: [&[u8]; 6] = [
-            &ROOT_FACEBOOK_CERT_1,
-            &ROOT_GOOGLE_CERT_G1,
-            &ROOT_GOOGLE_CERT_G2,
-            &ROOT_GOOGLE_CERT_G3,
-            &ROOT_GOOGLE_CERT_G4,
-            &ROOT_KAKAO_CERT,
-        ];
-        let mut check_signature_from_root = false;
-        for cert in known_root_certs {
-            if internal_cert.check_signature_from(&root_cert) {
-                check_signature_from_root = true;
-            }
-        }
-        if !check_signature_from_root {
-            //return None;
-            panic!("internal_cert.check_signature_from(&root_cert)");
-        }
-    }
+    // internal_cert was already verified against a pinned root above (F-02 fix).
 
     match leaf_cert.public_key_algorithm.to_string() {
         val if val == "RSA".to_string() => {
-            //
-            // pubkey, ok := leafCert.PublicKey.(*rsa.PublicKey)
             if let PublicKey::RsaPublicKey(pub_key) = leaf_cert.public_key {
-                //
                 let pss_options =
                     rsa::PSSOptions { salt_length: rsa::PSS_SALT_LENGTH_EQUALS_HASH, hash: 0 };
-                if !rsa::verify_pss(&pub_key, 256, check_sum, signature, &pss_options) {
-                    //if !rsa::verify_pss(&pub_key, 256, &check_prepared, &sig, &pss_options) {
-                    //return None;
-                    panic!("verify pss panic");
+                // F-05: use the hash size negotiated by sign_type, not hardcoded SHA-256.
+                if !rsa::verify_pss(
+                    &pub_key,
+                    signature_hash_bits,
+                    check_sum,
+                    signature,
+                    &pss_options,
+                ) {
+                    return None;
                 }
-
-                //if !rsa::verify_pkcs1v15(&pub_key,256, &check_prepared, signature) {
-
-                //panic!("verify pkcs panic"); //return None;
-                //}
             } else {
-                //return None; //ErrCertificateTypeMismatch
-                panic!("certificate type mismatch panic");
+                return None;
             }
         }
         val if val == "ECDSA".to_string() => {
-            //
             if let PublicKey::ECDSAPublicKey(pub_key) = leaf_cert.public_key {
-                //
-                let len_of_r = signature[3] as usize; //     lenOfr := signature[3]
-                let r_data = &signature[4..4 + len_of_r]; //     rData := signature[4:4+lenOfr]
+                let len_of_r = signature[3] as usize;
+                let r_data = &signature[4..4 + len_of_r];
                 let len_of_s = signature[4 + len_of_r + 1] as usize;
                 let s_data = &signature[4 + len_of_r + 2..4 + len_of_r + 2 + len_of_s];
-                let r = BigInt::from_bytes_be(Sign::Plus, r_data); //     r := new(big.Int).SetBytes(rData)
-                let s = BigInt::from_bytes_be(Sign::Plus, s_data); //     s := new(big.Int).SetBytes(sData)
+                let r = BigInt::from_bytes_be(Sign::Plus, r_data);
+                let s = BigInt::from_bytes_be(Sign::Plus, s_data);
                 if !ecdsa::verify(&pub_key, check_sum, &r, &s) {
-                    //return None;
-                    panic!("ecds verify panic");
+                    return None;
                 }
             } else {
-                //return None;  //ErrCertificateTypeMismatch
-                panic!("certificate type mismatch panic");
+                return None;
             }
         }
-        _ => panic!("Unknown signature algorithm"),
+        _ => return None,
     }
 
     return Some(root_cert.public_key);
 }
 
-pub fn check_certs_with_fixed_root(
+pub(super) fn check_certs_with_fixed_root(
     current_time: i64,
     provider: &[u8],
     check_sum: &[u8],
     certs_chain: &[u8],
     signature: &[u8],
     root_cert_bytes: &[u8],
+    signature_hash_bits: usize,
 ) -> Result<(), Vec<u8>> {
-    // ) -> bool {
-    //
     let check_certs_result = check_certs_wasm(
         current_time,
         provider,
@@ -3494,41 +3501,60 @@ pub fn check_certs_with_fixed_root(
         certs_chain,
         signature,
         root_cert_bytes,
+        signature_hash_bits,
     );
     //if check_certs_result.is_none() {
     //return Err(vec![0u8, 3u8, 180u8]); // "invalid certs chain" // return false;
     //}
     match check_certs_result {
         Ok(root_public_key) => {
-            let proposed_root_cert = parse_certificate(&root_cert_bytes).unwrap();
+            // F-03: caller-supplied bytes — propagate parse failure as Err.
+            let proposed_root_cert =
+                parse_certificate(&root_cert_bytes).map_err(|_| vec![0u8, 3u8, 191u8])?;
             if proposed_root_cert.public_key == root_public_key {
-                return Ok(()); // return true;
+                return Ok(());
             }
-            return Err(vec![0u8, 3u8, 190u8]); // "root public key does not match with key from proposed root cert" // return false;
+            return Err(vec![0u8, 3u8, 190u8]); // "root public key mismatch"
         }
         Err(e) => return Err(e),
     }
 }
 
-pub fn check_certs_with_known_roots(
+pub(super) fn check_certs_with_known_roots(
     current_time: i64,
     check_sum: &[u8],
     certs_chain: &[u8],
     signature: &[u8],
+    expected_hostname: &str,
+    signature_hash_bits: usize,
 ) -> Option<BigInt> {
-    let check_certs_result = check_certs(current_time, check_sum, certs_chain, signature);
-    if check_certs_result.is_none() {
-        return None;
-    }
-    let root_public_key_from_server = check_certs_result.unwrap();
+    let check_certs_result = check_certs(
+        current_time,
+        check_sum,
+        certs_chain,
+        signature,
+        expected_hostname,
+        signature_hash_bits,
+    );
+    let root_public_key_from_server = check_certs_result?;
 
-    let google_cert_g1 = parse_certificate(&ROOT_GOOGLE_CERT_G1).unwrap();
-    let google_cert_g2 = parse_certificate(&ROOT_GOOGLE_CERT_G2).unwrap();
-    let google_cert_g3 = parse_certificate(&ROOT_GOOGLE_CERT_G3).unwrap();
-    let google_cert_g4 = parse_certificate(&ROOT_GOOGLE_CERT_G4).unwrap();
-    let kakao_cert = parse_certificate(&ROOT_KAKAO_CERT).unwrap();
-    let facebook_cert_1 = parse_certificate(&ROOT_FACEBOOK_CERT_1).unwrap();
-    let facebook_cert_2 = parse_certificate(&ROOT_FACEBOOK_CERT_2).unwrap();
+    // F-03: these are build-time constants. If any pinned cert ever fails to
+    // parse it is a programmer bug, not attacker-controlled, so the `.expect`
+    // surfaces the build problem instead of being a silent skip.
+    let google_cert_g1 =
+        parse_certificate(&ROOT_GOOGLE_CERT_G1).expect("pinned ROOT_GOOGLE_CERT_G1 unparseable");
+    let google_cert_g2 =
+        parse_certificate(&ROOT_GOOGLE_CERT_G2).expect("pinned ROOT_GOOGLE_CERT_G2 unparseable");
+    let google_cert_g3 =
+        parse_certificate(&ROOT_GOOGLE_CERT_G3).expect("pinned ROOT_GOOGLE_CERT_G3 unparseable");
+    let google_cert_g4 =
+        parse_certificate(&ROOT_GOOGLE_CERT_G4).expect("pinned ROOT_GOOGLE_CERT_G4 unparseable");
+    let kakao_cert =
+        parse_certificate(&ROOT_KAKAO_CERT).expect("pinned ROOT_KAKAO_CERT unparseable");
+    let facebook_cert_1 =
+        parse_certificate(&ROOT_FACEBOOK_CERT_1).expect("pinned ROOT_FACEBOOK_CERT_1 unparseable");
+    let facebook_cert_2 =
+        parse_certificate(&ROOT_FACEBOOK_CERT_2).expect("pinned ROOT_FACEBOOK_CERT_2 unparseable");
 
     let mut result = BigInt::from(0);
     let mut root_check = false;
@@ -3573,48 +3599,60 @@ pub fn check_certs_with_known_roots(
     return Some(result);
 }
 
-pub fn check_certs_wasm(
+fn check_certs_wasm(
     current_time: i64,
     provider: &[u8],
     check_sum: &[u8],
     certs_chain: &[u8],
     signature: &[u8],
     spare_root_cert: &[u8],
+    signature_hash_bits: usize,
 ) -> Result<PublicKey, Vec<u8>> {
-    // -> Option<PublicKey> {
-    // extract
-    // divide input string into three slices
-
+    // F-03: bounds-check every multi-byte read from certs_chain before slicing
+    // and propagate parser failures as Err instead of panicking.
+    if certs_chain.len() < 6 {
+        return Err(vec![0u8, 3u8, 75u8]);
+    }
     let len_of_certs_chain = (certs_chain[0] as usize) * 65536
         + (certs_chain[1] as usize) * 256
         + (certs_chain[2] as usize);
 
     if len_of_certs_chain + 1 != certs_chain.len() {
-        return Err(vec![0u8, 3u8, 75u8]); // "certs chain len does not match" //return None;
+        return Err(vec![0u8, 3u8, 75u8]); // "certs chain len does not match"
     }
 
     let len_of_leaf_cert = (certs_chain[3] as usize) * 65536
         + (certs_chain[4] as usize) * 256
         + (certs_chain[5] as usize);
 
+    if 6 + len_of_leaf_cert > certs_chain.len() {
+        return Err(vec![0u8, 3u8, 75u8]);
+    }
     let leaf_cert_slice = &certs_chain[6..len_of_leaf_cert + 6];
 
-    let mut leaf_cert = parse_certificate(leaf_cert_slice).unwrap(); // leafCert, err := x509.ParseCertificate(leafCertSlice)
+    let mut leaf_cert = parse_certificate(leaf_cert_slice).map_err(|_| vec![0u8, 3u8, 78u8])?;
 
     if leaf_cert.not_after.timestamp() < current_time
         || leaf_cert.not_before.timestamp() > current_time
     {
-        return Err(vec![0u8, 3u8, 76u8]); // "leaf cert has expired"  //return None;
+        return Err(vec![0u8, 3u8, 76u8]); // "leaf cert has expired"
     }
 
     let start_index = len_of_leaf_cert + 8;
+    if start_index + 3 > certs_chain.len() {
+        return Err(vec![0u8, 3u8, 75u8]);
+    }
     let len_of_internal_cert = (certs_chain[start_index] as usize) * 65536
         + (certs_chain[start_index + 1] as usize) * 256
         + (certs_chain[start_index + 2] as usize);
 
+    if start_index + 3 + len_of_internal_cert > certs_chain.len() {
+        return Err(vec![0u8, 3u8, 75u8]);
+    }
     let internal_cert_slice = &certs_chain[start_index + 3..start_index + len_of_internal_cert + 3];
 
-    let mut internal_cert = parse_certificate(internal_cert_slice).unwrap(); // internalCert, err := x509.ParseCertificate(internalCertSlice)
+    let mut internal_cert =
+        parse_certificate(internal_cert_slice).map_err(|_| vec![0u8, 3u8, 78u8])?;
 
     if internal_cert.not_after.timestamp() < current_time
         || internal_cert.not_before.timestamp() > current_time
@@ -3622,23 +3660,17 @@ pub fn check_certs_wasm(
         return Err(vec![0u8, 3u8, 77u8]); // "internal cert has expired"// return None;
     }
 
-    let start_index = start_index + 3 + len_of_internal_cert + 2;
-
-    let root_cert = if start_index + 2 < certs_chain.len() {
-        let len_of_root_cert = (certs_chain[start_index] as usize) * 65536
-            + (certs_chain[start_index + 1] as usize) * 256
-            + (certs_chain[start_index + 2] as usize);
-        let root_cert_slice = &certs_chain[start_index + 3..start_index + len_of_root_cert + 3];
-        // let root_cert = parse_certificate(root_cert_slice);
-        parse_certificate(root_cert_slice).unwrap()
-    } else {
-        parse_certificate(&spare_root_cert).unwrap() //parse_certificate(&ROOT_FACEBOOK_CERT)
+    // F-02: trust anchor MUST come from the caller-supplied root, not the wire.
+    // We intentionally ignore any third certificate present in certs_chain.
+    let root_cert = match parse_certificate(&spare_root_cert) {
+        Ok(c) => c,
+        Err(_) => return Err(vec![0u8, 3u8, 79u8]), // "spare root cert unparseable"
     };
 
     if root_cert.not_after.timestamp() < current_time
         || root_cert.not_before.timestamp() > current_time
     {
-        return Err(vec![0u8, 3u8, 80u8]); // "root cert has expired" //return None;
+        return Err(vec![0u8, 3u8, 80u8]); // "root cert has expired"
     }
 
     // let context: [u8; 98] = [32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
@@ -3680,72 +3712,45 @@ pub fn check_certs_wasm(
         return Err(vec![0u8, 3u8, 82u8]); //panic!("internal_cert.check_signature_from(&root_cert)");
     }
 
-    println!("internal_cert.subject.common_name: {:?}", internal_cert.subject.common_name); // "WR2"(for Google), "DigiCert Global G2 TLS RSA SHA256 2020 CA1" (for facebook), "Thawte TLS RSA CA G1" (for kakao)
-
-    println!("leaf_cert.issuer: {:?}", leaf_cert.issuer.organization[0]);
-    if leaf_cert.issuer.organization[0] != "DigiCert Inc"
-        && leaf_cert.issuer.organization[0] != "Google Trust Services"
+    if leaf_cert.issuer.organization.is_empty()
+        || (leaf_cert.issuer.organization[0] != "DigiCert Inc"
+            && leaf_cert.issuer.organization[0] != "Google Trust Services")
     {
         return Err(vec![0u8, 3u8, 83u8]); // "untrusted leaf cert issuer"
     }
 
-    println!("leaf_cert.subject.common_name: {:?}", leaf_cert.subject.common_name);
-    println!("provider: {:?}", provider); // "*.facebook.com", "*.kakao.com", "upload.video.google.com"
-    //println!("leaf_cert.subject.value: {:?}", leaf_cert.subject.names[]);
-    match leaf_cert.subject.common_name.as_str() {
-        "upload.video.google.com" => {
-            if internal_cert.subject.common_name != "WR1"
-                && internal_cert.subject.common_name != "WE1"
-                && internal_cert.subject.common_name != "WR2"
-                && internal_cert.subject.common_name != "WE2"
-            {
-                return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
-            }
+    // F-09: enforce RFC 6125 SAN matching against the hostname implied by the
+    // provider identifier. The intermediate-CN whitelist below is defence in
+    // depth, not the security boundary.
+    let (expected_hostname, expected_internal_cns): (&str, &[&str]) = match provider {
+        b"google" => ("www.googleapis.com", &["WR1", "WE1", "WR2", "WE2"]),
+        b"kakao" => ("kauth.kakao.com", &["Thawte TLS RSA CA G1"]),
+        b"facebook" => ("www.facebook.com", &["DigiCert Global G2 TLS RSA SHA256 2020 CA1"]),
+        b"gosh" => ("oauth.gosh.sh", &["WR1", "WE1", "WR2", "WE2"]),
+        _ => return Err(vec![0u8, 3u8, 85u8]), // "unknown provider"
+    };
 
-            if provider != vec![103, 111, 111, 103, 108, 101] {
-                return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
-            }
-        }
-        "*.kakao.com" => {
-            if internal_cert.subject.common_name != "Thawte TLS RSA CA G1" {
-                return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
-            }
-            if provider != vec![107, 97, 107, 97, 111] {
-                return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
-            }
-        }
-        "*.facebook.com" => {
-            if internal_cert.subject.common_name != "DigiCert Global G2 TLS RSA SHA256 2020 CA1" {
-                return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
-            }
-            if provider != vec![102, 97, 99, 101, 98, 111, 111, 107] {
-                return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
-            }
-        }
-        "gosh.sh" => {
-            if internal_cert.subject.common_name != "WR1"
-                && internal_cert.subject.common_name != "WE1"
-                && internal_cert.subject.common_name != "WR2"
-                && internal_cert.subject.common_name != "WE2"
-            {
-                return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
-            }
+    if !hostname_matches_san(&leaf_cert.dns_names, expected_hostname) {
+        return Err(vec![0u8, 3u8, 85u8]); // "leaf cert SAN does not match expected hostname"
+    }
 
-            if provider != vec![103, 111, 115, 104] {
-                return Err(vec![0u8, 3u8, 85u8]); // "incorrect leaf_cert.subject.common_name"
-            }
-        }
-        _ => return Err(vec![0u8, 3u8, 85u8]), // "incorrect leaf_cert.subject.common_name"
+    if !expected_internal_cns.iter().any(|cn| *cn == internal_cert.subject.common_name) {
+        return Err(vec![0u8, 3u8, 84u8]); // "untrusted internal cert common_name"
     }
 
     match leaf_cert.public_key_algorithm.to_string() {
         val if val == "RSA".to_string() => {
-            // pubkey, ok := leafCert.PublicKey.(*rsa.PublicKey)
             if let PublicKey::RsaPublicKey(pub_key) = leaf_cert.public_key {
-                //
                 let pss_options =
                     rsa::PSSOptions { salt_length: rsa::PSS_SALT_LENGTH_EQUALS_HASH, hash: 0 };
-                if !rsa::verify_pss(&pub_key, 256, check_sum, signature, &pss_options) {
+                // F-05: pass the negotiated hash bit-length down to PSS.
+                if !rsa::verify_pss(
+                    &pub_key,
+                    signature_hash_bits,
+                    check_sum,
+                    signature,
+                    &pss_options,
+                ) {
                     // if !rsa::verify_pss(&pub_key, 256, &check_prepared, &sig, &pss_options) {
                     // return None;
                     return Err(vec![0u8, 3u8, 86u8]); // panic!("verify pss panic");
@@ -3872,12 +3877,6 @@ mod tests {
     fn it_parses_leaf_cert() {
         let certificate = parse_certificate(&LEAF_CERT_BYTES).unwrap();
 
-        println!("the certificate.version is : {:?}", &certificate.version);
-        println!("the certificate.serial_number is : {:?}", &certificate.serial_number.to_string());
-        println!("the certificate.issuer.names is : {:?}", &certificate.issuer.names);
-        println!("the certificate.key_usage is : {:?}", &certificate.key_usage);
-        println!("the certificate.public_key is : {:?}", &certificate.public_key);
-
         let certificate_version: i64 = 3;
         assert_eq!(certificate.version, certificate_version);
 
@@ -3979,8 +3978,6 @@ mod tests {
         // len is 1295
         let certificate = parse_certificate(&INTERNAL_CERT_BYTES);
 
-        println!("the certificate.version is : {:?}", &certificate.version);
-        println!("the certificate.serial_number is : {:?}", &certificate.serial_number);
 
         // lenOfRootCert is : 1382
         let certificate_version: i64 = 2;
@@ -4063,11 +4060,6 @@ mod tests {
     fn it_parses_pseudoroot_cert() {
         let certificate = parse_certificate(&PSEUDOROOT_CERT_BYTES).unwrap();
 
-        println!("the certificate.version is : {:?}", &certificate.version);
-        println!("the certificate.serial_number is : {:?}", &certificate.serial_number.to_string());
-        println!("the certificate.issuer.names is : {:?}", &certificate.issuer.names);
-        println!("the certificate.public_key is : {:?}", &certificate.public_key);
-
         // lenOfRootCert is : 1382
         let certificate_version: i64 = 3;
         assert_eq!(certificate.version, certificate_version);
@@ -4082,7 +4074,6 @@ mod tests {
 
         let rsa_public_n = BigInt::from_str("742766292573789461138430713106656498577482106105452767343211753017973550878861638590047246174848574634573720584492944669558785810905825702100325794803983120697401526210439826606874730300903862093323398754125584892080731234772626570955922576399434033022944334623029747454371697865218999618129768679013891932765999545116374192173968985738129135224425889467654431372779943313524100225335793262665132039441111162352797240438393795570253671786791600672076401253164614309929080014895216439462173458352253266568535919120175826866378039177020829725517356783703110010084715777806343235841345264684364598708732655710904078855499605447884872767583987312177520332134164321746982952420498393591583416464199126272682424674947720461866762624768163777784559646117979893432692133818266724658906066075396922419161138847526583266030290937955148683298741803605463007526904924936746018546134099068479370078440023459839544052468222048449819089106832452146002755336956394669648596035188293917750838002531358091511944112847917218550963597247358780879029417872466325821996717925086546502702016501643824750668459565101211439428003662613442032518886622942136328590823063627643918273848803884791311375697313014431195473178892344923166262358299334827234064598421").unwrap();
         let etalon_pk = PublicKey::RsaPublicKey(rsa::PublicKey { n: rsa_public_n, e: 65537 });
-        println!("etalon public_key is : {:?}", &etalon_pk);
         assert_eq!(etalon_pk, certificate.public_key);
     }
 
@@ -4100,9 +4091,6 @@ mod tests {
     fn test_checking_leaf_and_internal_cert() {
         let internal_cert = parse_certificate(&INTERNAL_CERT_BYTES).unwrap();
         let mut leaf_cert = parse_certificate(&LEAF_CERT_BYTES).unwrap();
-
-        println!("the leaf_cert.signature is : {:?}", &leaf_cert.signature);
-        println!("the leaf_cert.signature_algorithm is : {:?}", &leaf_cert.signature_algorithm);
 
         //let pk: rsa::PublicKey = rsa::PublicKey(internal_cert.public_key);
         //println!("the internal_cert.public_key is : {:?}", &pk.n.to_string());
@@ -4197,15 +4185,9 @@ mod tests {
     ];
 
     #[test]
-    fn test_checking_internal_and_pseudoroot_cert_ECDSA() {
+    fn test_checking_internal_and_pseudoroot_cert_ecdsa() {
         let mut internal_cert = parse_certificate(&INTERNAL_CERT_BYTES_ECDSA).unwrap();
         let pseudoroot_cert = parse_certificate(&PSEUDOROOT_CERT_BYTES_ECDSA).unwrap();
-
-        println!("the internal_cert.signature is : {:?}", &internal_cert.signature);
-        println!(
-            "the internal_cert.signature_algorithm is : {:?}",
-            &internal_cert.signature_algorithm
-        );
 
         //println!("the certificate.version is : {:?}", &certificate.version);
         //println!("the certificate.serial_number is : {:?}", &certificate.serial_number);
