@@ -38,16 +38,16 @@ impl Curve {
     // ScalarBaseMult). But even for Add and Double, it's faster to apply and
     // reverse the transform than to operate in affine coordinates.
 
-    // polynomial returns x³ - 3x + b.
+    // polynomial returns x³ - 3x + b reduced mod p (non-negative).
     pub fn polynomial(&self, x: &BigInt) -> BigInt {
-        let x3 = x * x * x; // x^3
-        //let three_x = x << 1 + x; // 3x
-        let three_x = x.shl(1) + x; // 3x
+        let x3: BigInt = x * x * x; // x^3
+        let three_x: BigInt = x.shl(1) + x; // 3x
 
-        let mut result = x3 - three_x + &self.b;
-        result = result % &self.p;
-
-        result
+        let result: BigInt = x3 - three_x + &self.b;
+        // F-06: use mod_floor so the result is always in [0, p), even when the
+        // unreduced value is negative (which happens for adversarially supplied
+        // small x). `%` follows the sign of the dividend in BigInt arithmetic.
+        result.mod_floor(&self.p)
     }
 
     pub fn is_on_curve(&self, x: &BigInt, y: &BigInt) -> bool {
@@ -85,15 +85,13 @@ impl Curve {
     }
 
     pub fn add(&self, x1: &BigInt, y1: &BigInt, x2: &BigInt, y2: &BigInt) -> (BigInt, BigInt) {
-        //if matches_specific_curve(self).is_some() {
-        //return matches_specific_curve(self).unwrap().add(x1, y1, x2, y2);
-        //}
-        if !matches_specific_curve(self).is_some() {
-            panic!("unknown curve");
+        // F-06: fail-closed instead of panicking on attacker-influenced input.
+        if matches_specific_curve(self).is_none() {
+            return (BigInt::zero(), BigInt::zero());
         }
-
-        panic_if_not_on_curve(self, x1, y1);
-        panic_if_not_on_curve(self, x2, y2);
+        if !is_valid_point(self, x1, y1) || !is_valid_point(self, x2, y2) {
+            return (BigInt::zero(), BigInt::zero());
+        }
 
         let z1 = Self::z_for_affine(x1, y1);
         let z2 = Self::z_for_affine(x2, y2);
@@ -111,10 +109,8 @@ impl Curve {
         y2: &BigInt,
         z2: &BigInt,
     ) -> (BigInt, BigInt, BigInt) {
-        let mut x3 = BigInt::zero();
-        let mut y3 = BigInt::zero();
-        let mut z3 = BigInt::zero();
-
+        // F-15.5: x3/y3/z3 were zero-initialised then unconditionally
+        // overwritten — dead stores. Bind on first computed value below.
         if z1.is_zero() {
             return (x2.clone(), y2.clone(), z2.clone());
         }
@@ -152,16 +148,18 @@ impl Curve {
         }
 
         r <<= 1;
-        let v = u1 * &i_sq;
+        let v: BigInt = u1 * &i_sq;
 
-        x3 = (&r * &r - &j - &v - &v).mod_floor(&self.p); // x3 = r^2 - j - 2v
+        let x3_tmp: BigInt = &r * &r - &j - &v - &v;
+        let x3 = x3_tmp.mod_floor(&self.p); // x3 = r^2 - j - 2v
 
-        //y3 = r * (v - &x3) % &self.p; // y3 = r(v - x3)
         s1 = s1 * j << 1; // s1 = 2 * y1 * z2 * z2z2
-        y3 = (r * (v - &x3) - s1).mod_floor(&self.p);
+        let y3_tmp: BigInt = r * (v - &x3) - s1;
+        let y3 = y3_tmp.mod_floor(&self.p);
 
-        z3 = z1 + z2;
-        z3 = (h * (&z3 * &z3 - &z1z1 - &z2z2)).mod_floor(&self.p); // z3 = h*( (z1 + z2)^2 - z1^2 - z2^2)
+        let z3_sum: BigInt = z1 + z2;
+        let z3_tmp: BigInt = h * (&z3_sum * &z3_sum - &z1z1 - &z2z2);
+        let z3 = z3_tmp.mod_floor(&self.p); // z3 = h*( (z1 + z2)^2 - z1^2 - z2^2)
 
         (x3, y3, z3)
     }
@@ -182,8 +180,9 @@ impl Curve {
 
         let beta = x * &gamma;
 
-        let mut x3 = &alpha * &alpha;
-        let beta8 = (&beta << 3).mod_floor(&self.p); // (beta * 2^3) % p
+        let mut x3: BigInt = &alpha * &alpha;
+        let beta8_tmp: BigInt = &beta << 3;
+        let beta8 = beta8_tmp.mod_floor(&self.p); // (beta * 2^3) % p
         x3 = x3 - &beta8;
         if x3.is_negative() {
             x3 += &self.p;
@@ -201,7 +200,7 @@ impl Curve {
         }
         z3 = z3.mod_floor(&self.p);
 
-        let mut beta_double = beta << 2;
+        let mut beta_double: BigInt = beta << 2;
         beta_double = beta_double - &x3;
         if beta_double.is_negative() {
             beta_double += &self.p;
@@ -209,8 +208,9 @@ impl Curve {
 
         let mut y3 = alpha * beta_double;
 
-        let gamma_sq = &gamma * &gamma;
-        let gamma_lsh = (gamma_sq << 3).mod_floor(&self.p);
+        let gamma_sq: BigInt = &gamma * &gamma;
+        let gamma_lsh_tmp: BigInt = gamma_sq << 3;
+        let gamma_lsh = gamma_lsh_tmp.mod_floor(&self.p);
 
         y3 = y3 - &gamma_lsh;
         if y3.is_negative() {
@@ -222,14 +222,13 @@ impl Curve {
     }
 
     pub fn scalar_mult(&self, bx: &BigInt, by: &BigInt, k: &[u8]) -> (BigInt, BigInt) {
-        //if let Some(specific) = matches_specific_curve(self) {
-        //return specific.scalar_mult(bx, by, k);
-        //}
-        if !matches_specific_curve(self).is_some() {
-            panic!("unknown curve");
+        // F-06: fail-closed instead of panicking on attacker-influenced input.
+        if matches_specific_curve(self).is_none() {
+            return (BigInt::zero(), BigInt::zero());
         }
-
-        panic_if_not_on_curve(self, bx, by);
+        if !is_valid_point(self, bx, by) {
+            return (BigInt::zero(), BigInt::zero());
+        }
 
         let bz = BigInt::from(1);
         let mut x = BigInt::zero();
@@ -252,14 +251,10 @@ impl Curve {
     }
 
     pub fn scalar_base_mult(&self, k: &[u8]) -> (BigInt, BigInt) {
-        //if let Some(specific) = matches_specific_curve(self) {
-        //return specific.scalar_base_mult(k);
-        //}
-
-        if !matches_specific_curve(self).is_some() {
-            panic!("unknown curve");
+        // F-06: fail-closed instead of panicking on unknown curve.
+        if matches_specific_curve(self).is_none() {
+            return (BigInt::zero(), BigInt::zero());
         }
-
         self.scalar_mult(&self.gx, &self.gy, k)
     }
 
@@ -413,6 +408,15 @@ pub fn panic_if_not_on_curve(curve: &Curve, x: &BigInt, y: &BigInt) {
     }
 }
 
+// F-06: non-panicking variant. Treats the point at infinity (0,0) as valid
+// because the internal Jacobian arithmetic uses it as a sentinel.
+pub fn is_valid_point(curve: &Curve, x: &BigInt, y: &BigInt) -> bool {
+    if x.is_zero() && y.is_zero() {
+        return true;
+    }
+    curve.is_on_curve(x, y)
+}
+
 pub fn p224() -> Curve {
     // -> &'static dyn Curve {
 
@@ -487,16 +491,16 @@ pub fn p521() -> Curve {
 }
 
 fn hash_to_int(hash: &[u8], c: &Curve) -> BigInt {
-    let order_bits = c.params().n.bits(); // Extract the bit length of the order
-    let order_bytes = (order_bits + 7) / 8; // Determine the number of bytes
+    let order_bits = c.params().n.bits() as usize; // num-bigint 0.4 returns u64
+    let order_bytes = (order_bits + 7) / 8;
     let mut hash = hash.to_vec();
 
-    if hash.len() > order_bytes as usize {
-        hash.truncate(order_bytes as usize); // Trims the hash to the required bytes
+    if hash.len() > order_bytes {
+        hash.truncate(order_bytes);
     }
 
-    let mut ret = BigInt::from_bytes_be(num_bigint::Sign::Plus, &hash); // Transforms to BigInt
-    let excess = hash.len() * 8 - order_bits; // Calculating the excess bits
+    let mut ret = BigInt::from_bytes_be(num_bigint::Sign::Plus, &hash);
+    let excess = hash.len() * 8 - order_bits;
     if excess > 0 {
         ret >>= excess; // Move to the right
     }
@@ -510,16 +514,36 @@ pub struct PublicKey {
     pub y: BigInt,
 }
 
+// F-06: validate that the public key is a non-infinity point on the declared
+// curve. Without this, an attacker-controlled CA can present an off-curve point
+// whose `verify` operation falls into the larger ambient group where ECDSA
+// signatures can be forged.
+fn validate_public_key(pub_key: &PublicKey) -> bool {
+    if matches_specific_curve(&pub_key.curve).is_none() {
+        return false;
+    }
+    if pub_key.x.is_zero() && pub_key.y.is_zero() {
+        return false; // point at infinity
+    }
+    if pub_key.x < BigInt::zero()
+        || pub_key.x >= pub_key.curve.p
+        || pub_key.y < BigInt::zero()
+        || pub_key.y >= pub_key.curve.p
+    {
+        return false;
+    }
+    pub_key.curve.is_on_curve(&pub_key.x, &pub_key.y)
+}
+
 pub fn verify(pub_key: &PublicKey, hash: &[u8], r: &BigInt, s: &BigInt) -> bool {
+    if !validate_public_key(pub_key) {
+        return false;
+    }
     if r <= &BigInt::from(0) || s <= &BigInt::from(0) {
         return false;
     }
 
     verify_nistec(pub_key, &hash, &r, &s)
-    //match encode_signature(&r.to_bytes_be().1, &s.to_bytes_be().1) {
-    //Ok(sig) => verify_asn1(pub_key, hash, &sig),
-    //Err(_) => false,
-    //}
 }
 
 pub fn verify_nistec(pub_key: &PublicKey, hash: &[u8], r: &BigInt, s: &BigInt) -> bool {
@@ -557,69 +581,26 @@ pub fn verify_nistec(pub_key: &PublicKey, hash: &[u8], r: &BigInt, s: &BigInt) -
     x_final == *r // Compare x with r
 }
 
-pub fn mod_inverse(g: &BigInt, n: &BigInt) -> Option<BigInt> {
+// F-06: mod_inverse is restricted to a **prime** modulus and is called only
+// with the curve order `n` (always prime for our supported curves), so the
+// Fermat's-little-theorem shortcut g^(n-2) mod n produces the right result.
+// Marked `pub(crate)` so a future caller can't accidentally pass a composite
+// modulus and silently get a wrong answer (F-06 sub-finding 6.3).
+pub(crate) fn mod_inverse(g: &BigInt, n: &BigInt) -> Option<BigInt> {
     let mut n = n.clone();
     let mut g = g.clone();
 
-    // GCD expects parameters a and b to be > 0.
     if n.sign() == Sign::Minus {
-        n = n.abs() // Transforms n to positive
+        n = n.abs();
     }
     if g.sign() == Sign::Minus {
-        // if g.neg {
-        g = g.add(&n); // g = g.modulus(&n)?;
+        g = g.add(&n);
     }
 
-    //let (d, x) = gcd(&g, &n); // Call GCD
-
-    // if and only if d == 1, g and n are relatively prime
-    //if d != BigInt::from(1) {
-    //return None;
-    //}
-
-    // x and y are such that g * x + n * y = 1, so x is the inverse element.
-    // but it can be negative, so we transform it into the range 0 <= z < |n|
-    //if x.sign()==Sign::Minus { // if x.neg {
-    //Some(x.add(&n))
-    //} else {
-    //Some(x) //self.set(&x);
-    //}
-
-    //Some(self.clone())
     let exponent = &n - BigInt::from(2);
-    let res = g.modpow(&exponent, &n);
-    Some(res)
+    Some(g.modpow(&exponent, &n))
 }
 
-// Find greatest common divisor of a and b.
-pub fn gcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt) {
-    // pub fn gcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
-    let mut x0 = BigInt::zero();
-    let mut x1 = BigInt::one();
-    let mut y0 = BigInt::one();
-    let mut y1 = BigInt::zero();
-
-    let mut a = a.clone();
-    let mut b = b.clone();
-
-    while b != BigInt::zero() {
-        let (q, r) = a.div_rem(&b); // Divide a by b, get the quotient and the remainder
-
-        // Refresh a and b
-        let temp = b.clone();
-        b = r;
-        a = temp;
-
-        // Refresh coefficients of x and y
-        let x_temp = x1.clone();
-        x1 = &x0 - &(&q & x1);
-        x0 = x_temp;
-
-        let y_temp = y1.clone();
-        y1 = &y0 - &(&q & y1);
-        y0 = y_temp;
-    }
-
-    //(a, x0, y0) // returns GCD and coefficients of x and y
-    (x0, y0) // returns x's and y's coefficients
-}
+// F-06: gcd (extended-Euclidean) was unused and contained a bitwise-AND bug
+// (`&q & x1` instead of multiplication). The audit's remediation: "Delete
+// dead code (gcd, mod_inverse if unused)" — `gcd` is removed.

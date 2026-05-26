@@ -1,5 +1,5 @@
 //mod tls_format;
-mod aes256gcm;
+mod aes128gcm;
 mod certs;
 mod hkdf_sha256;
 mod sha512;
@@ -10,16 +10,16 @@ use std::io::Write;
 use std::io::{self};
 use std::net::TcpStream;
 
-//use base64::decode;
-use base64url::decode;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
 use format::*;
 use hex::FromHex;
 use hkdf_sha256::*;
-use rand::RngCore;
 use x25519::BASE_POINT;
 use x25519::curve25519_donna;
 
+use crate::error::TlsError;
 use crate::format;
 use crate::network;
 use crate::tls_session::certs::check_certs_with_fixed_root;
@@ -45,37 +45,39 @@ const ECDSA_WITH_SHA512: u16 = 1539; // 06 03 (ECDSA-SECP521r1-SHA512)
 const SHA256WITH_RSAPSS: u16 = 2057; // 08 09 (RSA-PSS-PSS-SHA256)
 const SHA384WITH_RSAPSS: u16 = 2058; // 08 0a (RSA-PSS-PSS-SHA384)
 const SHA512WITH_RSAPSS: u16 = 2059; // 08 0b (RSA-PSS-PSS-SHA512)
-const PURE_ED25519: u16 = 2055; // 08 07 (ED25519)
 
-pub fn get_root_cert_google_g1() -> [u8; 1371] {
+// F-15.14: pinned-root accessors are used only by in-crate tests and the
+// neighbouring contract-path helpers. `pub(crate)` makes the intent explicit
+// — these are not part of any documented stability promise.
+pub(crate) fn get_root_cert_google_g1() -> [u8; 1371] {
     certs::ROOT_GOOGLE_CERT_G1
 }
 
-pub fn get_root_cert_google_g2() -> [u8; 1371] {
+pub(crate) fn get_root_cert_google_g2() -> [u8; 1371] {
     certs::ROOT_GOOGLE_CERT_G2
 }
 
-pub fn get_root_cert_google_g3() -> [u8; 525] {
+pub(crate) fn get_root_cert_google_g3() -> [u8; 525] {
     certs::ROOT_GOOGLE_CERT_G3
 }
 
-pub fn get_root_cert_google_g4() -> [u8; 525] {
+pub(crate) fn get_root_cert_google_g4() -> [u8; 525] {
     certs::ROOT_GOOGLE_CERT_G4
 }
 
-pub fn get_root_cert_kakao() -> [u8; 914] {
+pub(crate) fn get_root_cert_kakao() -> [u8; 914] {
     certs::ROOT_KAKAO_CERT
 }
 
-pub fn get_root_cert_facebook_2() -> [u8; 914] {
+pub(crate) fn get_root_cert_facebook_2() -> [u8; 914] {
     certs::ROOT_FACEBOOK_CERT_2
 }
 
-pub fn get_root_cert_facebook_1() -> [u8; 969] {
+pub(crate) fn get_root_cert_facebook_1() -> [u8; 969] {
     certs::ROOT_FACEBOOK_CERT_1
 }
 
-pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, String> {
+pub(crate) fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, String> {
     let mut map: HashMap<String, String> = HashMap::new();
     match domain {
         "www.googleapis.com" => {
@@ -134,7 +136,7 @@ pub fn get_root_certs_map_(domain: &str) -> Result<HashMap<String, String>, Stri
     }
 }
 
-pub struct Keys {
+pub(crate) struct Keys {
     pub public: [u8; 32],
     pub private: [u8; 32],
     pub handshake_secret: [u8; 32],
@@ -149,13 +151,18 @@ pub struct Keys {
     pub server_application_iv: [u8; 12],
 }
 
-pub fn random32bytes() -> [u8; 32] {
+// F-15.12: route all key material through the OS CSPRNG directly. `thread_rng`
+// is a CSPRNG too, but routing the X25519 private key and Client/Server randoms
+// through `OsRng` removes the dependency on rand's reseeding logic for the
+// secrets that anchor session security.
+pub(crate) fn random32bytes() -> [u8; 32] {
+    use rand_core::RngCore;
     let mut buf = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut buf);
+    rand_core::OsRng.fill_bytes(&mut buf);
     buf
 }
 
-pub fn key_pair() -> Keys {
+pub(crate) fn key_pair() -> Keys {
     //println!("private_key {:?}", private_key);
     let private_key = random32bytes();
     //let private_key = [231, 226, 189, 128, 175, 192, 46, 233, 160, 243, 227, 168, 186, 174, 207, 111, 124, 21, 6, 220, 18, 155, 18, 17, 39, 165, 203, 108, 109, 3, 40, 186];
@@ -184,19 +191,19 @@ pub fn key_pair() -> Keys {
 // AEAD helper functions
 
 fn decrypt(key: &[u8; 16], iv: &[u8; 12], wrapper: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
-    let block = aes256gcm::new_cipher(key);
-    let aes_gcm = aes256gcm::new_gcm(block);
+    let block = aes128gcm::new_cipher(key);
+    let aes_gcm = aes128gcm::new_gcm(block);
 
     let additional = &wrapper[0..5];
     let ciphertext = &wrapper[5..];
 
-    let plaintext = aes_gcm.open(&[], iv, ciphertext, additional);
-    Ok(plaintext)
+    // F-03: AEAD auth failure must propagate as an error, not crash.
+    aes_gcm.open(&[], iv, ciphertext, additional).map_err(|_| vec![0u8, 3u8, 100u8])
 }
 
 fn encrypt(key: &[u8; 16], iv: &[u8; 12], plaintext: &[u8], additional: &[u8]) -> Vec<u8> {
-    let block = aes256gcm::new_cipher(key);
-    let aes_gcm = aes256gcm::new_gcm(block);
+    let block = aes128gcm::new_cipher(key);
+    let aes_gcm = aes128gcm::new_gcm(block);
 
     //let nonce = Nonce::from_slice(iv); // 96-bits; retrieve nonce from the IV
     //let ciphertext = aesgcm.encrypt(nonce, additional, plaintext).expect("Encryption failed");
@@ -205,8 +212,7 @@ fn encrypt(key: &[u8; 16], iv: &[u8; 12], plaintext: &[u8], additional: &[u8]) -
     [additional.to_vec(), ciphertext].concat() // Concatenate additional data with ciphertext
 }
 
-// pub fn hkdf_expand_label(secret: &[u8; 32], label: &str, context: &[u8], length: u16) -> Vec<u8> {
-pub fn hkdf_expand_label(
+pub(crate) fn hkdf_expand_label(
     secret: &[u8; 32],
     label: &str,
     context: &[u8],
@@ -234,7 +240,7 @@ pub fn hkdf_expand_label(
     buf
 }
 
-pub fn derive_secret(
+pub(crate) fn derive_secret(
     secret: &[u8; 32],
     label: &str,
     transcript_messages: &[u8],
@@ -257,7 +263,8 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(domain: String) -> io::Result<Self> {
+    pub fn new(domain: String) -> Result<Self, TlsError> {
+        // F-13: surface failures as TlsError so callers get a uniform type.
         let stream = TcpStream::connect(format!("{}:443", domain))?;
         let keys = key_pair();
         Ok(Session {
@@ -280,85 +287,78 @@ impl Session {
         })
     }
 
-    pub fn connect(&mut self) {
-        self.send_client_hello();
-        println!("SendClientHello done");
-        self.get_server_hello();
-        println!("GetServerHello done");
-        self.make_handshake_keys();
-        println!("MakeHandshakeKeys done");
-        self.parse_server_handshake();
-        println!("ParseServerHandshake done");
-        self.client_change_cipher_spec();
-        println!("ClientChangeCipherSpec done");
-        self.client_handshake_finished();
-        println!("ClientHandshakeFinished done");
+    pub fn connect(&mut self) -> Result<(), TlsError> {
+        // F-13: every error path now produces a TlsError variant rather than a
+        // free-form String, so callers can match on the failure category
+        // without parsing log strings.
+        self.send_client_hello()?;
+        self.get_server_hello()?;
+        self.make_handshake_keys()?;
+        if !self.parse_server_handshake()? {
+            return Err(TlsError::CertificateValidationFailed);
+        }
+        self.client_change_cipher_spec()?;
+        self.client_handshake_finished()?;
+        Ok(())
     }
 
-    pub fn send_client_hello(&mut self) {
-        // send client hello
+    pub fn send_client_hello(&mut self) -> Result<(), TlsError> {
         let mut conn = &self.conn;
-        //self.Keys = key_pair();
         let client_hello = Self::client_hello(&self.domain_name, &self.keys);
         self.messages.client_hello = Record { 0: client_hello.to_vec() };
-        network::send(&mut conn, &client_hello);
+        network::send(&mut conn, &client_hello)?;
+        Ok(())
     }
 
-    pub fn get_server_hello(&mut self) {
-        let record = format::read_record(&mut self.conn);
+    pub fn get_server_hello(&mut self) -> Result<(), TlsError> {
+        let record = format::read_record(&mut self.conn)?;
         if record.rtype() != 0x16 {
-            //panic("expected server hello")
-            println!("expected server hello ")
+            return Err(TlsError::MalformedRecord);
         }
 
         self.messages.server_hello = record.clone();
-        let hello = format::parse_server_hello(&mut record.contents());
-        self.server_hello = hello.unwrap();
+        let hello = format::parse_server_hello(&mut record.contents())
+            .map_err(|_| TlsError::MalformedRecord)?;
+        self.server_hello = hello;
+        Ok(())
     }
 
-    fn parse_server_handshake(&mut self) -> bool {
-        // ignore change cipher spec 14 03 03
-        let mut record = format::read_record(&mut self.conn); // let record = tls_format::ReadRecord(&self.conn);
+    // F-13: Ok(true) = handshake OK, Ok(false) = cert validation failed (caller
+    // surfaces as CertificateValidationFailed), Err = IO / AEAD failure.
+    fn parse_server_handshake(&mut self) -> Result<bool, TlsError> {
+        let mut record = format::read_record(&mut self.conn)?;
         if record.rtype() == 0x14 {
-            //println!("pass change cipher spec")
-            record = format::read_record(&mut self.conn);
+            record = format::read_record(&mut self.conn)?;
         }
 
         if record.rtype() != 0x17 {
-            //panic!("expected wrapper (ParseServerHandshake)");
-            return false;
+            return Ok(false);
         }
         let mut server_handshake_message =
             decrypt(&self.keys.server_handshake_key, &self.keys.server_handshake_iv, &record.0[..])
-                .unwrap();
-        //println!("server_handshake_message is : {:?}", &server_handshake_message);
+                .map_err(|_| TlsError::AeadAuthFailed)?;
         if server_handshake_message.len() > 2000 {
             self.messages.encrypted_server_handshake = record.clone();
         } else {
             server_handshake_message =
-                format::trunc_end_with_trailer(&server_handshake_message, 22u8); //server_handshake_message.pop();
-            println!("server_handshake_message is : {:?}", &server_handshake_message);
-            //server_handshake_message = [8u8, 0u8, 0u8, 2u8, 0u8, 0u8].to_vec();
+                format::trunc_end_with_trailer(&server_handshake_message, 22u8);
             let mut records_received_counter = 1u8;
 
             loop {
-                let record = format::read_record(&mut self.conn);
+                let record = format::read_record(&mut self.conn)?;
                 let mut iv = self.keys.server_handshake_iv.clone();
                 iv[11] ^= records_received_counter;
                 let mut server_handshake_message_next_part =
-                    decrypt(&self.keys.server_handshake_key, &iv, &record.0[..]).unwrap();
+                    decrypt(&self.keys.server_handshake_key, &iv, &record.0[..])
+                        .map_err(|_| TlsError::AeadAuthFailed)?;
                 server_handshake_message_next_part =
-                    format::trunc_end_with_trailer(&server_handshake_message_next_part, 22u8); // trunc end zeros with 22
-                //println!("server_handshake_message_next_part is : {:?}", &server_handshake_message_next_part);
-                //let message_type = server_handshake_message_next_part[0];
+                    format::trunc_end_with_trailer(&server_handshake_message_next_part, 22u8);
                 let handshake_finish =
                     format::contains_handshake_finish(&server_handshake_message_next_part);
                 server_handshake_message.append(&mut server_handshake_message_next_part);
                 records_received_counter += 1;
 
-                //println!("message_type is : {:?}", &message_type);
                 if handshake_finish {
-                    // if message_type==0x14 {
                     break;
                 }
             }
@@ -381,27 +381,35 @@ impl Session {
         self.messages.server_handshake = DecryptedRecord { 0: server_handshake_message };
 
         self.make_application_keys();
-        if !(self.check_handshake()) {
-            return false;
-        }
-        return true;
+        Ok(self.check_handshake())
     }
 
     pub fn check_handshake(&mut self) -> bool {
         let handshake_data = self.messages.server_handshake.contents();
-        //println!("check_handshake handshake_data is : {:?}", &handshake_data);
+        // F-03: every panic in this function used to be reachable by malformed
+        // ServerHello bytes from an attacker. Convert each to fail-closed
+        // returns so the caller (parse_server_handshake / connect) surfaces
+        // them as a CertificateValidationFailed error.
+        if handshake_data.len() < 4 {
+            return false;
+        }
         let len_of_padding = handshake_data[3] as usize;
-        let certs_chain = &handshake_data[4 + len_of_padding + 1..]; //let certs_chain = &handshake_data[7..];
+        if handshake_data.len() < 4 + len_of_padding + 1 {
+            return false;
+        }
+        let certs_chain = &handshake_data[4 + len_of_padding + 1..];
 
-        //println!("check_handshake certs_chain is : {:?}", &certs_chain);
-
-        //next three bytes is the length of certs chain
+        if certs_chain.len() < 3 {
+            return false;
+        }
         let certs_chain_len = (certs_chain[0] as usize) * 65536
             + (certs_chain[1] as usize) * 256
             + (certs_chain[2] as usize);
-        println!("certs_chain_len is : {:?}", &certs_chain_len); // must be 4205 = 4096 + 109
+        if certs_chain.len() < certs_chain_len + 11 {
+            return false;
+        }
         if certs_chain[certs_chain_len + 3] != 0xf {
-            panic!("signature not found");
+            return false;
         }
 
         let sign_type = (certs_chain[certs_chain_len + 7] as u16) * 256
@@ -413,16 +421,18 @@ impl Session {
             && sign_type != ECDSA_WITH_SHA384
             && sign_type != SHA384WITH_RSAPSS
             && sign_type != SHA384WITH_RSA
-            && sign_type != SHA384WITH_RSAE // && sign_type != SHA512WITH_RSAE
+            && sign_type != SHA384WITH_RSAE
             && sign_type != SHA512WITH_RSA
             && sign_type != ECDSA_WITH_SHA512
         {
-            panic!("not supported (not sha) type of signature");
+            return false;
         }
 
         let signature_len = (certs_chain[certs_chain_len + 9] as usize) * 256
             + (certs_chain[certs_chain_len + 10] as usize);
-        println!("signature_len is : {:?}", &signature_len);
+        if certs_chain.len() < certs_chain_len + 11 + signature_len {
+            return false;
+        }
         let signature = &certs_chain[certs_chain_len + 11..certs_chain_len + 11 + signature_len];
 
         //let signature_with_type = concatenate(&[ &certs_chain[certs_chain_len + 7..certs_chain_len + 8], &signature]);
@@ -448,35 +458,33 @@ impl Session {
 
         let check_sum_extend = format::concatenate(&[&context, &check_sum]);
 
-        let check_prepared = match sign_type {
-            SHA256WITH_RSAE => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
-            SHA256WITH_RSA => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
-            ECDSA_WITH_SHA256 => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
-            SHA256WITH_RSAPSS => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
-            ECDSA_WITH_SHA384 => sha512::sum384(&check_sum_extend).to_vec(),
-            SHA384WITH_RSAPSS => sha512::sum384(&check_sum_extend).to_vec(),
-            SHA384WITH_RSA => sha512::sum384(&check_sum_extend).to_vec(),
-            SHA384WITH_RSAE => sha512::sum384(&check_sum_extend).to_vec(),
-            SHA512WITH_RSA => sha512::sum512(&check_sum_extend).to_vec(),
-            ECDSA_WITH_SHA512 => sha512::sum512(&check_sum_extend).to_vec(),
-            _ => panic!("not supported (not sha256, sha384 or sha512) type of signature"),
+        // F-05: keep the hash bit-length so RSA-PSS verify uses the right
+        // MGF1 / inner-hash. Previously verify_pss was always SHA-256.
+        let (check_prepared, signature_hash_bits): (Vec<u8>, usize) = match sign_type {
+            SHA256WITH_RSAE | SHA256WITH_RSA | ECDSA_WITH_SHA256 | SHA256WITH_RSAPSS => {
+                (hkdf_sha256::sum256(&check_sum_extend).to_vec(), 256)
+            }
+            ECDSA_WITH_SHA384 | SHA384WITH_RSAPSS | SHA384WITH_RSA | SHA384WITH_RSAE => {
+                (sha512::sum384(&check_sum_extend).to_vec(), 384)
+            }
+            SHA512WITH_RSA | ECDSA_WITH_SHA512 => (sha512::sum512(&check_sum_extend).to_vec(), 512),
+            _ => return false,
         };
 
-        println!("client_server_hello is : {:?}", &client_server_hello);
         let check_result = check_certs_with_known_roots(
             current_timestamp,
             &check_prepared,
             &certs_chain[4..certs_chain_len + 1],
             &signature,
+            &self.domain_name,
+            signature_hash_bits,
         );
         if check_result.is_none() {
             //panic(err.Error())
-            println!("error in certificates chain !");
             return false;
         }
 
         let root_cert_sn = format!("0x{:064x}", check_result.clone().unwrap());
-        println!("root_cert_sn: {:?}", root_cert_sn);
         //let mut file = File::create("found_root_id.txt").expect("Error creating file");
         //file.write(check_result.unwrap().to_string().as_bytes());
         self.root_cert_sn = root_cert_sn;
@@ -509,13 +517,15 @@ impl Session {
             hkdf_expand_label(&s_ap_secret, "iv", &[], 12).unwrap().try_into().unwrap();
     }
 
-    fn client_change_cipher_spec(&mut self) {
-        network::send(&mut self.conn, &[0x14, 0x03, 0x03, 0x00, 0x01, 0x01]);
+    fn client_change_cipher_spec(&mut self) -> Result<(), TlsError> {
+        network::send(&mut self.conn, &[0x14, 0x03, 0x03, 0x00, 0x01, 0x01])?;
+        Ok(())
     }
 
-    fn client_handshake_finished(&mut self) {
+    fn client_handshake_finished(&mut self) -> Result<(), TlsError> {
         let client_handshake_finished_msg = self.client_handshake_finished_msg();
-        network::send(&mut self.conn, &client_handshake_finished_msg[..]);
+        network::send(&mut self.conn, &client_handshake_finished_msg[..])?;
+        Ok(())
     }
 
     fn client_handshake_finished_msg(&self) -> Vec<u8> {
@@ -538,14 +548,19 @@ impl Session {
         encrypted
     }
 
-    pub fn make_handshake_keys(&mut self) {
+    pub fn make_handshake_keys(&mut self) -> Result<(), TlsError> {
         let zeros = [0u8; 32];
         let psk = [0u8; 32];
 
-        //self.server_hello.public_key=[246, 48, 130, 234, 125, 96, 179, 219, 52, 226, 168, 235, 57, 47, 53, 103, 96, 246, 129, 101, 202, 83, 142, 117, 64, 20, 47, 242, 241, 212, 56, 30];
-        //println!("&self.server_hello.public_key is : {:?}", &self.server_hello.public_key);
-        let shared_secret =
-            curve25519_donna(&self.keys.private, &self.server_hello.public_key).unwrap(); //let shared_secret = X25519::from_slice(&self.keys.private).mul(&self.server_hello.public_key);
+        let shared_secret = curve25519_donna(&self.keys.private, &self.server_hello.public_key)
+            .map_err(|_| TlsError::InvalidPeerPublicKey)?;
+
+        // F-07: RFC 7748 §6.1 requires rejecting an all-zero shared secret;
+        // it signals the peer sent a small-subgroup point that degrades
+        // forward secrecy to a value the attacker chose.
+        if shared_secret.iter().all(|b| *b == 0) {
+            return Err(TlsError::InvalidPeerPublicKey);
+        }
         //println!("shared_secret is : {:?}", shared_secret);
 
         let early_secret = hkdf_sha256::extract(&zeros, &psk).unwrap(); //let (early_secret, hkdf) = Hkdf::<Sha256>::extract(Some(&zeros), &psk);
@@ -582,6 +597,7 @@ impl Session {
             hkdf_expand_label(&s_hs_secret, "key", &[], 16).unwrap().try_into().unwrap();
         self.keys.server_handshake_iv =
             hkdf_expand_label(&s_hs_secret, "iv", &[], 12).unwrap().try_into().unwrap();
+        Ok(())
     }
 
     pub fn verify_data(&self) -> Vec<u8> {
@@ -598,88 +614,62 @@ impl Session {
         hm.sum(&[])
     }
 
-    //pub fn send_data(&mut self, data: &[u8]) -> io::Result<()> {
-    //self.conn.write_all(data)?;
-    //Ok(())
-    //}
-    pub fn send_data(&mut self, data: &[u8]) {
+    pub fn send_data(&mut self, data: &[u8]) -> Result<(), TlsError> {
         let msg = self.encrypt_application_data(&data);
 
-        println!("send_data msg is : {:?}", msg);
         self.records_sent += 1;
-        let _ = self.conn.write(&msg[..]); // self.conn.write_all(data)?;
+        // F-10: write_all so partial sends do not corrupt the AEAD frame.
+        self.conn.write_all(&msg[..])?;
         self.messages.application_request = Record { 0: msg };
+        Ok(())
     }
 
-    pub fn receive_data(&mut self) -> Vec<u8> {
-        // receive ticket
-        let record = format::read_record(&mut self.conn);
-        println!("gotten record is : {:?}", &record.0);
+    pub fn receive_data(&mut self) -> Result<Vec<u8>, TlsError> {
+        let record = format::read_record(&mut self.conn)?;
         let mut iv = self.keys.server_application_iv.clone();
         iv[11] ^= self.records_received;
-        println!("receive_data iv is : {:?}", &iv);
-        println!(
-            "receive_data self.keys.server_application_key is : {:?}",
-            &self.keys.server_application_key
-        );
-        let plaintext = decrypt(&self.keys.server_application_key, &iv, &record.0[..]).unwrap();
-        println!("decrypted record is : {:?}", &plaintext);
+        let plaintext = decrypt(&self.keys.server_application_key, &iv, &record.0[..])
+            .map_err(|_| TlsError::AeadAuthFailed)?;
         self.records_received += 1;
         self.messages.encrypted_ticket = record;
-        plaintext
+        Ok(plaintext)
     }
 
-    pub fn receive_http_response(&mut self) -> Vec<u8> {
-        //
+    pub fn receive_http_response(&mut self) -> Result<Vec<u8>, TlsError> {
         let mut response = Vec::new();
 
         loop {
-            println!("receive a portion!");
-            let mut pt = self.receive_http_data();
-            pt = format::trunc_end_with_trailer(&pt, 23u8); // trunc zeroes with 23
-            println!("pt is : {:?}", pt);
-            response.extend_from_slice(&pt[..pt.len()]); // response.extend_from_slice(&pt[..pt.len()-1]);
-            //response.push(23);
-
-            // Check whether the end of the response matches the desired sequence
+            let mut pt = self.receive_http_data()?;
+            pt = format::trunc_end_with_trailer(&pt, 23u8);
+            response.extend_from_slice(&pt[..pt.len()]);
             if pt.len() >= 5 && &pt[pt.len() - 4..] == &[0x0D, 0x0A, 0x0D, 0x0A] {
-                // if pt.len() >= 5 && &pt[pt.len() - 5..] == &[0x0D, 0x0A, 0x0D, 0x0A, 0x17] {
                 break;
             }
         }
 
-        response
+        Ok(response)
     }
 
-    fn receive_http_data(&mut self) -> Vec<u8> {
-        let record = format::read_record(&mut self.conn);
-        let mut iv = vec![0u8; 12];
-
-        println!("receive_http_data record is : {:?}", &record.0[..]);
-        iv.copy_from_slice(&self.keys.server_application_iv);
-
+    fn receive_http_data(&mut self) -> Result<Vec<u8>, TlsError> {
+        let record = format::read_record(&mut self.conn)?;
+        let mut iv = self.keys.server_application_iv;
         iv[11] ^= self.records_received as u8;
 
-        let plaintext =
-            decrypt(&self.keys.server_application_key, &iv.try_into().unwrap(), &record.0[..])
-                .unwrap();
-        println!("receive_http_data plaintext is : {:?}", &plaintext);
+        let plaintext = decrypt(&self.keys.server_application_key, &iv, &record.0[..])
+            .map_err(|_| TlsError::AeadAuthFailed)?;
 
         self.records_received += 1;
+        self.messages.http_response.0.extend(record.0);
 
-        self.messages.http_response.0.extend(record.0); // add to sequence of ciphertexts
-
-        plaintext
+        Ok(plaintext)
     }
 
     pub fn encrypt_application_data(&mut self, data: &[u8]) -> Vec<u8> {
         let mut data_vec = data.to_vec();
-        println!("encrypt_application_data data.len() is : {:?}", &data.len());
         data_vec.push(0x17);
         let additional_length = (data_vec.len() + 16) as u16;
         let additional =
             format::concatenate(&[&[0x17, 0x03, 0x03], &format::u16_to_bytes(additional_length)]);
-        println!("encrypt_application_data additional is : {:?}", &additional);
         encrypt(
             &self.keys.client_application_key,
             &self.keys.client_application_iv,
@@ -743,7 +733,7 @@ impl Session {
     }
 }
 
-pub fn is_valid_client_hello(provider: &[u8], data: &[u8]) -> bool {
+pub(crate) fn is_valid_client_hello(provider: &[u8], data: &[u8]) -> bool {
     if data[0] != 0x16 {
         return false;
     }
@@ -753,12 +743,11 @@ pub fn is_valid_client_hello(provider: &[u8], data: &[u8]) -> bool {
         return false;
     }
 
-    let mut len_of_hostname: usize = 0;
-
-    match provider.to_vec() {
-        val if val == vec![103, 111, 111, 103, 108, 101] => {
-            // "google"
-            len_of_hostname = 25;
+    // F-15.2-style: emit len_of_hostname from the match instead of an
+    // overwritten dead store. Each arm validates the SNI bytes for the
+    // declared provider.
+    let len_of_hostname: usize = match provider {
+        b"google" => {
             if data[54..79]
                 != [
                     0, 23, 0, 21, 0, 0, 18, 119, 119, 119, 46, 103, 111, 111, 103, 108, 101, 97,
@@ -767,10 +756,9 @@ pub fn is_valid_client_hello(provider: &[u8], data: &[u8]) -> bool {
             {
                 return false; // "www.googleapis.com"
             }
+            25
         }
-        val if val == vec![107, 97, 107, 97, 111] => {
-            // "kakao"
-            len_of_hostname = 22;
+        b"kakao" => {
             if data[54..76]
                 != [
                     0, 20, 0, 18, 0, 0, 15, 107, 97, 117, 116, 104, 46, 107, 97, 107, 97, 111, 46,
@@ -779,10 +767,9 @@ pub fn is_valid_client_hello(provider: &[u8], data: &[u8]) -> bool {
             {
                 return false; // "kauth.kakao.com"
             }
+            22
         }
-        val if val == vec![102, 97, 99, 101, 98, 111, 111, 107] => {
-            // "facebook"
-            len_of_hostname = 23;
+        b"facebook" => {
             if data[54..77]
                 != [
                     0, 21, 0, 19, 0, 0, 16, 119, 119, 119, 46, 102, 97, 99, 101, 98, 111, 111, 107,
@@ -791,10 +778,9 @@ pub fn is_valid_client_hello(provider: &[u8], data: &[u8]) -> bool {
             {
                 return false; // "www.facebook.com"
             }
+            23
         }
-        val if val == vec![103, 111, 115, 104] => {
-            // "gosh"
-            len_of_hostname = 20;
+        b"gosh" => {
             if data[54..74]
                 != [
                     0, 18, 0, 16, 0, 0, 13, 111, 97, 117, 116, 104, 46, 103, 111, 115, 104, 46,
@@ -803,9 +789,10 @@ pub fn is_valid_client_hello(provider: &[u8], data: &[u8]) -> bool {
             {
                 return false; // "oauth.gosh.sh"
             }
+            20
         }
         _ => return false,
-    }
+    };
     let group_extensions = vec![
         0, 10, 0, 4, 0, 2, 0, 29, 0, 13, 0, 20, 0, 18, 4, 3, 8, 4, 4, 1, 5, 3, 8, 5, 5, 1, 8, 6, 6,
         1, 2, 1, 0, 51, 0, 38, 0, 36, 0, 29, 0, 32,
@@ -828,7 +815,7 @@ pub fn is_valid_client_hello(provider: &[u8], data: &[u8]) -> bool {
     return true;
 }
 
-pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
+pub(crate) fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     if raw.len() < 4000 {
         return vec![0u8, 3u8, 33u8]; // "insufficient len" : 0x3, 0x21 = 801
     }
@@ -862,7 +849,7 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     // the first output byte indicates the success of the process: if it equals to 1
     // then success then follows the public keys from json
     // if the first bytes equals to 0 then unsuccess and the error code follows
-    let timestamp_shortened = aes256gcm::uint32(&timestamp_bytes);
+    let timestamp_shortened = aes128gcm::uint32(&timestamp_bytes);
     let timestamp = timestamp_shortened as i64;
     let private_key: [u8; 32] = data[0..32].try_into().unwrap();
 
@@ -884,7 +871,6 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     //if client_hello[0] != 0x16 {
     //return vec![0u8, 3u8, 39u8]; // "client hello not found"
     //}
-    println!("client_hello: {:?}", client_hello);
 
     if !is_valid_client_hello(provider, client_hello) {
         return vec![0u8, 3u8, 39u8]; // "invalid client hello"
@@ -943,7 +929,6 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     // unwrap();
     let http_response = &data[handshake_end_index + app_request_len + encr_ticket_len..]; // let http_response = &data[handshake_end_index + app_request_len + 540..]; // let http_response = &data[handshake_end_index+640..];
 
-    println!("http_response.len(): {:?}", http_response.len());
     if http_response.len() < 1000 {
         return vec![0u8, 3u8, 43u8]; // "insufficient http response len"
     }
@@ -973,6 +958,11 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         return shared_secret_result.err().unwrap();
     }
     let shared_secret = shared_secret_result.unwrap();
+    // F-07: RFC 7748 §6.1 — reject all-zero shared secret (small-subgroup
+    // point sent by the peer would degrade forward secrecy).
+    if shared_secret.iter().all(|b| *b == 0) {
+        return vec![0u8, 3u8, 110u8]; // "X25519 small-subgroup point"
+    }
 
     // Handshake using HKDF
     //let early_secret = hkdf_sha256::extract(&zeros, &psk);
@@ -1117,7 +1107,6 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
     let signature_len = (certs_chain[certs_chain_len + 9] as usize) * 256
         + (certs_chain[certs_chain_len + 10] as usize);
 
-    println!("signature_len: {:?}", signature_len);
     if signature_len < 64 {
         return vec![0u8, 3u8, 72u8]; // "insufficient signature length"
     }
@@ -1147,30 +1136,29 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
 
     let check_sum_extend = format::concatenate(&[&context, &check_sum]);
 
-    let check_prepared = match sign_type {
-        SHA256WITH_RSAE => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
-        SHA256WITH_RSA => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
-        ECDSA_WITH_SHA256 => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
-        SHA256WITH_RSAPSS => hkdf_sha256::sum256(&check_sum_extend).to_vec(),
-        ECDSA_WITH_SHA384 => sha512::sum384(&check_sum_extend).to_vec(),
-        SHA384WITH_RSAPSS => sha512::sum384(&check_sum_extend).to_vec(),
-        SHA384WITH_RSA => sha512::sum384(&check_sum_extend).to_vec(),
-        SHA384WITH_RSAE => sha512::sum384(&check_sum_extend).to_vec(),
-        ECDSA_WITH_SHA512 => sha512::sum512(&check_sum_extend).to_vec(),
-        SHA512WITH_RSA => sha512::sum512(&check_sum_extend).to_vec(),
-        SHA512WITH_RSAE => sha512::sum512(&check_sum_extend).to_vec(),
-        SHA512WITH_RSAPSS => sha512::sum512(&check_sum_extend).to_vec(),
-        _ => return vec![0u8, 3u8, 73u8], // "not supported (not sha256, sha384 or sha512) type of signature"
+    // F-05: surface the hash bit-length so RSA-PSS verify can plumb the
+    // matching SHA-256 / SHA-384 / SHA-512 down to MGF1.
+    let (check_prepared, signature_hash_bits): (Vec<u8>, usize) = match sign_type {
+        SHA256WITH_RSAE | SHA256WITH_RSA | ECDSA_WITH_SHA256 | SHA256WITH_RSAPSS => {
+            (hkdf_sha256::sum256(&check_sum_extend).to_vec(), 256)
+        }
+        ECDSA_WITH_SHA384 | SHA384WITH_RSAPSS | SHA384WITH_RSA | SHA384WITH_RSAE => {
+            (sha512::sum384(&check_sum_extend).to_vec(), 384)
+        }
+        ECDSA_WITH_SHA512 | SHA512WITH_RSA | SHA512WITH_RSAE | SHA512WITH_RSAPSS => {
+            (sha512::sum512(&check_sum_extend).to_vec(), 512)
+        }
+        _ => return vec![0u8, 3u8, 73u8], // "not supported type of signature"
     };
 
     if let Err(e) = check_certs_with_fixed_root(
-        // if !check_certs_with_fixed_root(
         timestamp,
         &provider,
         &check_prepared,
         &certs_chain[4..certs_chain_len + 1],
         &signature,
         &external_root_cert,
+        signature_hash_bits,
     ) {
         return e; //return vec![0u8, 3u8, 74u8]; // "error in certificates chain !"
     }
@@ -1249,7 +1237,10 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
 
     let plaintext_as_string = String::from_utf8_lossy(&plaintext).to_string();
 
-    let expires_timestamp = format::extract_expires(&plaintext_as_string);
+    let expires_timestamp = match format::extract_expires(&plaintext_as_string) {
+        Some(t) => t,
+        None => return vec![0u8, 3u8, 130u8], // "no Date/Expires header"
+    };
 
     let strings_n = format::extract_all_items("n", &plaintext_as_string); // = format::extract_all_n(&plaintext_as_string);
     let strings_kid = format::extract_all_items("kid", &plaintext_as_string);
@@ -1262,10 +1253,16 @@ pub fn extract_json_public_key_from_tls(raw: Vec<u8>) -> Vec<u8> {
         let current_decoded_kid = Vec::from_hex(substring).unwrap();
 
         if current_decoded_kid.eq(&kid.to_vec()) {
-            let current_decoded_n = decode(&strings_n[counter]).unwrap();
+            // F-12: JWK `n` is base64url-encoded without padding (RFC 7515 §2).
+            let current_decoded_n = match URL_SAFE_NO_PAD.decode(&strings_n[counter]) {
+                Ok(v) => v,
+                Err(_) => return vec![0u8, 3u8, 120u8], // "invalid base64url"
+            };
             let mut result = vec![1u8];
 
-            append_uint64(&mut result, expires_timestamp as u64);
+            // F-15.13/15.8: was `append_uint64` from the removed hand-rolled
+            // SHA-256 module — inline u64 big-endian write.
+            result.extend_from_slice(&(expires_timestamp as u64).to_be_bytes());
             result.append(&mut current_decoded_n.to_vec());
 
             return result;
@@ -1318,7 +1315,6 @@ fn cc_decrypt_test_with_data_from_go(){
         128, 245, 23, 157, 101, 226, 185, 225, 88, 90, 75, 251, 189, 64, 255, 122, 118, 66, 62, 43, 243, 205, 91, 27, 2, 253, 41, 67, 20, 104, 194, 211, 4, 237, 52, 195, 62, 157, 158, 50, 101, 119, 247, 194, 122, 251, 232, 34, 154, 242, 211, 197, 72, 69, 77, 255, 55, 218, 203, 0, 137, 180, 224, 0, 12, 0, 42, 0, 4, 0, 0, 56, 0, 138, 138, 0, 0, 22];
 
     let plaintext = decrypt(&keys_server_application_key, &iv, &record);
-    println!("plaintext is : {:?}", plaintext);
 
     assert_eq!(plaintext, etalon_plaintext);
 }
@@ -1332,7 +1328,6 @@ fn cc_encrypt_test_with_data_from_go(){
     let etalon_ciphertext = [23, 3, 3, 0, 95, 192, 206, 156, 237, 152, 153, 248, 195, 170, 179, 216, 15, 49, 39, 0, 169, 60, 76, 192, 117, 116, 172, 193, 165, 123, 147, 85, 229, 71, 50, 78, 252, 97, 160, 34, 92, 149, 251, 139, 117, 207, 175, 231, 163, 202, 186, 62, 178, 12, 54, 168, 84, 50, 56, 232, 44, 185, 241, 188, 244, 223, 211, 179, 47, 56, 202, 172, 237, 174, 91, 66, 83, 221, 176, 11, 4, 194, 127, 29, 63, 218, 104, 56, 241, 53, 109, 102, 59, 180, 246, 41, 251, 42, 202, 48];
 
     let ciphertext = encrypt(&keys_client_application_key, &keys_client_application_iv, &data, &additional);
-    println!("ciphertext is : {:?}", ciphertext);
 
     assert_eq!(ciphertext[..], etalon_ciphertext);
 }

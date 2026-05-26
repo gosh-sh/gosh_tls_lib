@@ -377,12 +377,11 @@ fn put_uint64(b: &mut [u8], v: u64) {
 // XORBytes sets dst[i] = x[i] ^ y[i] for all i < n = min(len(x), len(y)),
 // and outputs n, the number of bits, that was written in dst.
 fn xor_bytes(dst: &mut [u8], x: &[u8], y: &[u8]) -> usize {
-    let n = x.len().min(y.len());
+    // F-03: clamp instead of panicking. Reaching this with dst.len() < n would
+    // be an internal bug, but callers handle a short return naturally.
+    let n = x.len().min(y.len()).min(dst.len());
     if n == 0 {
         return 0;
-    }
-    if n > dst.len() {
-        panic!("XORBytes: dst too short");
     }
 
     for i in 0..n {
@@ -613,20 +612,23 @@ fn decrypt_block(xk: &[u32; 44], dst: &mut [u8; 16], src: &[u8; 16]) {
     put_uint32(&mut dst[12..16], s3);
 }
 
-// A cipher is an instance of AES encryption using a particular key.
-pub struct Aes256Cipher {
-    enc: [u32; 44], // enc []uint32
-    dec: [u32; 44], // dec []uint32
+// F-04: this is AES-128 (16-byte key, 10 rounds, 44 round-key words), not
+// AES-256. The module name aes256gcm.rs and previous struct name Aes256Cipher
+// were misleading carry-overs from the original port. The TLS handshake
+// negotiates TLS_AES_128_GCM_SHA256 (cipher suite 0x13 0x01) and the runtime
+// behaviour has always been AES-128-GCM — only the labelling was wrong.
+pub struct Aes128Cipher {
+    enc: [u32; 44],
+    dec: [u32; 44],
 }
 
-impl Aes256Cipher {
-    //
-    pub fn new(key: &[u8; 16]) -> Aes256Cipher {
+impl Aes128Cipher {
+    pub fn new(key: &[u8; 16]) -> Aes128Cipher {
         let mut enc = [0u32; 44];
         let mut dec = [0u32; 44];
         expand_key(key, &mut enc, &mut dec);
 
-        return Aes256Cipher { enc, dec };
+        Aes128Cipher { enc, dec }
     }
 
     pub fn block_size(&self) -> usize {
@@ -646,10 +648,10 @@ impl Aes256Cipher {
 // The key argument should be the AES key,
 // either 16, 24, or 32 bytes to select
 // AES-128, AES-192, or AES-256.
-pub fn new_cipher(key: &[u8; 16]) -> Aes256Cipher {
+pub fn new_cipher(key: &[u8; 16]) -> Aes128Cipher {
     //let n = 16 + 28; // let n = key.len() + 28;
 
-    let c = Aes256Cipher::new(key);
+    let c = Aes128Cipher::new(key);
     //let rounds = 10;
     //expand_key(key, c.enc, c.dec);
     c
@@ -713,7 +715,7 @@ fn gcm_double(x: &GcmFieldElement) -> GcmFieldElement {
 
 // Gcm represents a Galois Counter Mode with a specific key.
 pub struct Gcm {
-    cipher: Aes256Cipher,
+    cipher: Aes128Cipher,
     nonce_size: usize,
     tag_size: usize,
     // product_table contains first sixteen degrees of key H.
@@ -729,7 +731,7 @@ const GCM_STANDARD_NONCE_SIZE: usize = 12;
 impl Gcm {
     //
     pub fn new_gcm_with_nonce_and_tag_size(
-        cipher: Aes256Cipher,
+        cipher: Aes128Cipher,
         nonce_size: usize,
         tag_size: usize,
     ) -> Gcm {
@@ -824,25 +826,29 @@ impl Gcm {
         ret
     }
 
-    // fn open(&self, dst: &[u8], nonce: &[u8], ciphertext: &[u8], data: &[u8]) -> Result<Vec<u8>, &'static str> {
-    pub fn open(&self, dst: &[u8], nonce: &[u8], ciphertext: &[u8], data: &[u8]) -> Vec<u8> {
+    // F-03: an AEAD authentication failure is a *normal* event in TLS (active
+    // attack, network reordering, replay). It must surface as an error, not as
+    // a process crash. Return Result<Vec<u8>, ()>; callers map () to TlsError.
+    pub fn open(
+        &self,
+        _dst: &[u8],
+        nonce: &[u8],
+        ciphertext: &[u8],
+        data: &[u8],
+    ) -> Result<Vec<u8>, ()> {
         if nonce.len() != self.nonce_size {
-            panic!("crypto/cipher: incorrect nonce length given to GCM");
+            return Err(());
         }
-
-        // Check the correctness of tag size
         if self.tag_size < GCM_MINIMUM_TAG_SIZE {
-            panic!("crypto/cipher: incorrect GCM tag size");
+            return Err(());
         }
-
         if ciphertext.len() < self.tag_size {
-            panic!("cipher: message authentification failed 1"); //return Err(ERR_OPEN);
+            return Err(());
         }
-
         if ciphertext.len() as u64
             > ((1 << 32) - 2) * self.cipher.block_size() as u64 + self.tag_size as u64
         {
-            panic!("cipher: message authentification failed 2"); //return Err(ERR_OPEN);
+            return Err(());
         }
 
         let tag = &ciphertext[ciphertext.len() - self.tag_size..];
@@ -862,20 +868,18 @@ impl Gcm {
         let mut ret = Vec::with_capacity(ciphertext.len());
         ret.resize(ciphertext.len(), 0);
 
-        // Check buffers overlapping
-        // Let me know if you need to implement specific buffer overlap checks.
-
         if constant_time_compare(&expected_tag[..self.tag_size], tag) != 1 {
-            // Clear the output buffer if the tag does not match
+            // Zero the output buffer before returning, to avoid leaking the
+            // decrypted-but-unauthenticated bytes via any future code path.
             for byte in ret.iter_mut() {
                 *byte = 0;
             }
-            panic!("cipher: message authentification failed 3"); //return Err(ERR_OPEN);
+            return Err(());
         }
 
         self.counter_crypt(&mut ret, ciphertext, &mut counter);
 
-        ret //Ok(ret)
+        Ok(ret)
     }
 
     fn update_blocks(&self, y: &mut GcmFieldElement, blocks: &[u8]) {
@@ -1032,7 +1036,7 @@ pub fn constant_time_compare(x: &[u8], y: &[u8]) -> i32 {
 // In general, the GHASH operation performed by this implementation of GCM is not constant-time.
 // An exception is when the underlying [Block] was created by aes.NewCipher
 // on systems with hardware support for AES. See the [crypto/aes] package documentation for details.
-pub fn new_gcm(cipher: Aes256Cipher) -> Gcm {
+pub fn new_gcm(cipher: Aes128Cipher) -> Gcm {
     Gcm::new_gcm_with_nonce_and_tag_size(cipher, GCM_STANDARD_NONCE_SIZE, GCM_TAG_SIZE)
 }
 

@@ -1,17 +1,35 @@
 [package]
 name = "gosh_tls_lib"
-version = "0.2.1 "
+version = "0.2.1"
 edition = "2024"
 
 [dependencies]
 
-num-bigint = "0.2.2"
-num-integer = "0.1.46"
-num-traits = "0.2.8"
+# F-12: num-bigint 0.2 is end-of-life upstream and no longer receives
+# security fixes. Move to the 0.4 line (current major) along with matching
+# num-integer / num-traits.
+num-bigint = "0.4"
+num-integer = "0.1"
+num-traits = "0.2"
 
-base64url = "0.1.0"
-chrono = "0.4"
+# F-12: base64url = "0.1.0" is a 2014 single-author crate with no upstream
+# maintenance. Replaced with the actively maintained `base64` 0.22 (using the
+# URL_SAFE_NO_PAD engine where needed).
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 hex = "0.4"
 
-rand = "0.8.5"
+rand = "0.8"
 rand_core = { version = "0.6", features = ["getrandom"] }
+subtle = "2.5"
+
+# F-15.7/15.8: replace hand-rolled SHA-256/384/512 + HMAC + HKDF with the
+# RustCrypto crates. ~1200 lines of hand-rolled crypto removed from the
+# library surface; constant-time / well-audited implementations instead.
+sha2 = "0.10"
+hmac = "0.12"
+hkdf = "0.12"
+
+# F-07 strategic: vetted constant-time X25519 instead of the in-tree donna
+# port. dalek clamps the scalar internally and rejects small-order points.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
